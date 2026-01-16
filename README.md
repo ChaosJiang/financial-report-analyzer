@@ -91,6 +91,7 @@ financial-report-analyzer/
 ## 📥 安装
 
 详细的安装说明请查看 [INSTALL.md](INSTALL.md)。
+TODO： 直接安装到claude/skill目录
 
 快速安装：
 

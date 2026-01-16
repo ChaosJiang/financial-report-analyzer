@@ -496,6 +496,10 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
             "sector": info.get("sector"),
             "industry": info.get("industry"),
             "currency": info.get("currency"),
+            "summary": info.get("longBusinessSummary")
+            or info.get("shortBusinessSummary"),
+            "country": info.get("country"),
+            "website": info.get("website"),
         },
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "financials": {key: series_to_dict(value) for key, value in metrics.items()},
