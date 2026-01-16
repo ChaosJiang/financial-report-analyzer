@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Analyze analyst expectations from fetched data."""
 
-from __future__ import annotations
-
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+import logging
 import math
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from series_utils import parse_datetime
 
+logger = logging.getLogger(__name__)
 
 BUY_KEYWORDS = {"buy", "strong buy", "overweight", "outperform", "add"}
 HOLD_KEYWORDS = {"hold", "neutral", "market perform", "equal-weight"}
@@ -28,7 +28,7 @@ def grade_bucket(grade: str) -> str:
     return "other"
 
 
-def summarize_recommendations(recommendations: Dict[str, Any]) -> Dict[str, int]:
+def summarize_recommendations(recommendations: dict[str, Any]) -> dict[str, int]:
     if not recommendations or not isinstance(recommendations, dict):
         return {}
     grades = recommendations.get("To Grade", {})
@@ -75,10 +75,10 @@ def normalize_summary_value(value: Any) -> Any:
     return str(value)
 
 
-def summarize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+def summarize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     if not summary or not isinstance(summary, dict):
         return {}
-    latest: Dict[str, Any] = {}
+    latest: dict[str, Any] = {}
     for key, column_map in summary.items():
         if isinstance(column_map, dict) and column_map:
             value = next(iter(column_map.values()))
@@ -88,7 +88,7 @@ def summarize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     return latest
 
 
-def build_analyst_report(data: Dict[str, Any]) -> Dict[str, Any]:
+def build_analyst_report(data: dict[str, Any]) -> dict[str, Any]:
     info = data.get("info", {}) or {}
     analyst = data.get("analyst", {}) or {}
 
@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    with open(args.input, "r", encoding="utf-8") as handle:
+    with open(args.input, encoding="utf-8") as handle:
         data = json.load(handle)
 
     analyst_report = build_analyst_report(data)
@@ -130,7 +130,7 @@ def main() -> None:
     with open(output_path, "w", encoding="utf-8") as handle:
         json.dump(analyst_report, handle, ensure_ascii=False, indent=2)
 
-    print(f"Saved analyst report to {output_path}")
+    logger.info(f"Saved analyst report to {output_path}")
 
 
 if __name__ == "__main__":

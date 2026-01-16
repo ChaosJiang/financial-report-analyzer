@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """Generate a markdown report from analysis outputs."""
 
-from __future__ import annotations
-
 import argparse
 import json
+import logging
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any
 
 from series_utils import series_from_mapping, series_rows
 
+logger = logging.getLogger(__name__)
 
-def series_from_dict(data: Dict[str, float]):
+
+def series_from_dict(data: dict[str, float]):
     return series_from_mapping(data)
 
 
-def series_to_map(series) -> Dict[Any, float]:
+def series_to_map(series) -> dict[Any, float]:
     return {dt: value for dt, value in series_rows(series)}
 
 
@@ -35,7 +36,7 @@ def format_percent(value: Any) -> str:
     return str(value)
 
 
-def build_financial_table(analysis: Dict[str, Any]) -> str:
+def build_financial_table(analysis: dict[str, Any]) -> str:
     revenue = series_from_dict(analysis.get("financials", {}).get("revenue", {}))
     net_income = series_from_dict(analysis.get("financials", {}).get("net_income", {}))
     gross_margin = series_from_dict(analysis.get("ratios", {}).get("gross_margin", {}))
@@ -85,7 +86,7 @@ def build_financial_table(analysis: Dict[str, Any]) -> str:
     return "\n".join(table)
 
 
-def build_percentile_label(valuation: Dict[str, Any]) -> str:
+def build_percentile_label(valuation: dict[str, Any]) -> str:
     window = valuation.get("window", {})
     start = window.get("start")
     end = window.get("end")
@@ -98,7 +99,7 @@ def build_percentile_label(valuation: Dict[str, Any]) -> str:
     return "历史分位"
 
 
-def build_valuation_table(valuation: Dict[str, Any]) -> str:
+def build_valuation_table(valuation: dict[str, Any]) -> str:
     metrics = valuation.get("metrics", {})
     percentiles = valuation.get("percentiles", {})
 
@@ -124,7 +125,7 @@ def build_valuation_table(valuation: Dict[str, Any]) -> str:
     return "\n".join(table)
 
 
-def build_currency_note(valuation: Dict[str, Any]) -> str:
+def build_currency_note(valuation: dict[str, Any]) -> str:
     currency = valuation.get("currency", {})
     market = currency.get("market")
     financial = currency.get("financial")
@@ -143,7 +144,7 @@ def build_currency_note(valuation: Dict[str, Any]) -> str:
     return f"- 估值币种: {market} (财报币种: {financial}, 汇率: {fx_rate:.4f})"
 
 
-def build_analyst_section(analyst: Dict[str, Any]) -> str:
+def build_analyst_section(analyst: dict[str, Any]) -> str:
     rating = analyst.get("rating", {})
     targets = analyst.get("price_targets", {})
 
@@ -162,7 +163,7 @@ def build_analyst_section(analyst: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build_data_quality_section(analysis: Dict[str, Any]) -> str:
+def build_data_quality_section(analysis: dict[str, Any]) -> str:
     """Build data quality appendix section."""
     dq = analysis.get("data_quality", {})
     if not dq:
@@ -179,7 +180,7 @@ def build_data_quality_section(analysis: Dict[str, Any]) -> str:
     failed = validation.get("failed", 0)
 
     if total_checks > 0:
-        lines.append(f"### 数据验证")
+        lines.append("### 数据验证")
         lines.append(f"- 总验证检查: {total_checks}")
         lines.append(f"- 通过: {passed}")
         if failed > 0:
@@ -202,7 +203,7 @@ def build_data_quality_section(analysis: Dict[str, Any]) -> str:
     missing_fields = field_matching.get("missing_fields", 0)
 
     if fuzzy_matches > 0 or missing_fields > 0:
-        lines.append(f"### 字段匹配")
+        lines.append("### 字段匹配")
         if fuzzy_matches > 0:
             lines.append(f"- 模糊匹配字段数: {fuzzy_matches}")
             lines.append("  * 某些财务字段使用了模糊匹配算法，可能存在匹配错误")
@@ -216,7 +217,9 @@ def build_data_quality_section(analysis: Dict[str, Any]) -> str:
                     field = match.get("field", "?")
                     matched = match.get("matched", "?")
                     confidence = match.get("confidence", 0)
-                    lines.append(f"- '{field}' → '{matched}' (置信度: {confidence:.2f})")
+                    lines.append(
+                        f"- '{field}' → '{matched}' (置信度: {confidence:.2f})"
+                    )
                 if len(fuzzy_details) > 5:
                     lines.append(f"- ... 还有 {len(fuzzy_details) - 5} 个模糊匹配")
 
@@ -237,7 +240,7 @@ def build_data_quality_section(analysis: Dict[str, Any]) -> str:
 
 
 def build_report(
-    analysis: Dict[str, Any], valuation: Dict[str, Any], analyst: Dict[str, Any]
+    analysis: dict[str, Any], valuation: dict[str, Any], analyst: dict[str, Any]
 ) -> str:
     company = analysis.get("company", {})
     symbol = analysis.get("symbol")
@@ -305,17 +308,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    with open(args.analysis, "r", encoding="utf-8") as handle:
+    with open(args.analysis, encoding="utf-8") as handle:
         analysis = json.load(handle)
 
     valuation = {}
     if args.valuation:
-        with open(args.valuation, "r", encoding="utf-8") as handle:
+        with open(args.valuation, encoding="utf-8") as handle:
             valuation = json.load(handle)
 
     analyst = {}
     if args.analyst:
-        with open(args.analyst, "r", encoding="utf-8") as handle:
+        with open(args.analyst, encoding="utf-8") as handle:
             analyst = json.load(handle)
 
     report = build_report(analysis, valuation, analyst)
@@ -323,7 +326,7 @@ def main() -> None:
     with open(output_path, "w", encoding="utf-8") as handle:
         handle.write(report)
 
-    print(f"Saved report to {output_path}")
+    logger.info(f"Saved report to {output_path}")
 
 
 if __name__ == "__main__":

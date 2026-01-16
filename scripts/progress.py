@@ -11,13 +11,12 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from typing import Optional
 
 
 class ProgressIndicator:
     """Progress indicator with TTY detection."""
 
-    SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(self, message: str, use_spinner: bool = None):
         """
@@ -30,7 +29,7 @@ class ProgressIndicator:
         self.message = message
         self.is_tty = sys.stdout.isatty() if use_spinner is None else use_spinner
         self.running = False
-        self.thread: Optional[threading.Thread] = None
+        self.thread: threading.Thread | None = None
         self._frame_index = 0
 
     def start(self):
@@ -58,10 +57,10 @@ class ProgressIndicator:
             sys.stdout.write(frame)
             sys.stdout.flush()
             time.sleep(0.1)
-            sys.stdout.write('\b')
+            sys.stdout.write("\b")
             self._frame_index = (self._frame_index + 1) % len(self.SPINNER_FRAMES)
 
-    def stop(self, success: bool = True, final_message: Optional[str] = None):
+    def stop(self, success: bool = True, final_message: str | None = None):
         """
         Stop the progress indicator.
 
@@ -79,7 +78,7 @@ class ProgressIndicator:
 
         if self.is_tty:
             # Clear spinner
-            sys.stdout.write('\b')
+            sys.stdout.write("\b")
 
         # Show result
         if final_message:
@@ -171,9 +170,10 @@ class StepProgress:
             message: Completion message
         """
         if self.is_tty:
-            print(f"\n{message} ✓")
+            sys.stdout.write(f"\n{message} ✓\n")
         else:
-            print(f"{message}")
+            sys.stdout.write(f"{message}\n")
+        sys.stdout.flush()
 
 
 @contextmanager
@@ -214,7 +214,7 @@ class DotProgress:
         self.message = message
         self.dot_interval = dot_interval
         self.running = False
-        self.thread: Optional[threading.Thread] = None
+        self.thread: threading.Thread | None = None
 
     def start(self):
         """Start the dot progress."""
@@ -233,7 +233,7 @@ class DotProgress:
         while self.running:
             time.sleep(self.dot_interval)
             if self.running:
-                sys.stdout.write('.')
+                sys.stdout.write(".")
                 sys.stdout.flush()
 
     def stop(self):

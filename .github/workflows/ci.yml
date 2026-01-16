@@ -7,41 +7,20 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
-x-shared-steps:
-  - &checkout
-    uses: actions/checkout@v6
-  - &install-uv
-    name: Install uv
-    uses: astral-sh/setup-uv@v7
-    with:
-      version: "latest"
-  - &setup-python
-    name: Set up Python
-    uses: actions/setup-python@v6
-    with:
-      python-version: "3.11"
-
 jobs:
   lint:
     name: Lint with Ruff
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install Ruff with uv
         run: uv pip install --system ruff
 
       - name: Run Ruff linter
         run: |
-          ruff check scripts/ \
-            --select E,F,W,I,N,UP,YTT,ASYNC,S,BLE,B,A,COM,C4,DTZ,T10,EM,ISC,G,PIE,PYI,RSE,RET,SIM,TID,TCH,ARG,PTH,PD,PGH,PL,TRY,NPY,RUF \
-            --ignore \
-              E501, \
-              COM812, \
-              ISC001 \
-            --output-format=github
+          ruff check scripts/ --output-format=github
 
       - name: Run Ruff formatter check
         run: |
@@ -51,9 +30,8 @@ jobs:
     name: Type Check with MyPy
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies with uv
         run: |
@@ -69,9 +47,8 @@ jobs:
     name: Test scripts
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies with uv
         run: uv pip install --system -r scripts/requirements.txt
@@ -101,9 +78,8 @@ jobs:
     name: Integration Test
     runs-on: ubuntu-latest
     steps:
-      - *checkout
-      - *install-uv
-      - *setup-python
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies with uv
         run: uv pip install --system -r scripts/requirements.txt

@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
 """Fetch multi-market financial reports and price data."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
+import akshare as ak
 import numpy as np
 import yfinance as yf
-import akshare as ak
-
+from exceptions import APIError, DataFetchError, SymbolNotFoundError
 from logging_config import get_module_logger
-from exceptions import (
-    DataFetchError,
-    APIError,
-    SymbolNotFoundError,
-)
 
 logger = get_module_logger()
 
@@ -38,7 +31,7 @@ def infer_market(symbol: str) -> str:
     return "US"
 
 
-def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
+def df_to_dict(df: Any | None) -> dict[str, dict[str, Any]]:
     """Convert DataFrame to dict, handling various edge cases."""
     if df is None or getattr(df, "empty", False):
         return {}
@@ -74,7 +67,118 @@ def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
     return {}
 
 
-def get_ticker_info(ticker: yf.Ticker) -> Dict[str, Any]:
+def parse_period_date(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return value.to_pydatetime()
+        except Exception:
+            return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        for fmt in (
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+        ):
+            try:
+                return datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def trim_statement_columns(df: Any, max_periods: int) -> Any:
+    if df is None or max_periods <= 0:
+        return df
+    columns = getattr(df, "columns", None)
+    if columns is None:
+        return df
+    column_list = list(columns)
+    if not column_list:
+        return df
+    if len(column_list) <= max_periods:
+        return df
+
+    dated_columns = []
+    for col in column_list:
+        parsed = parse_period_date(col)
+        if parsed is not None:
+            dated_columns.append((parsed, col))
+
+    if dated_columns:
+        dated_columns.sort(key=lambda pair: pair[0], reverse=True)
+        keep_set = {col for _, col in dated_columns[:max_periods]}
+        keep = [col for col in column_list if col in keep_set]
+    else:
+        keep = column_list[:max_periods]
+
+    try:
+        return df[keep]
+    except Exception as e:
+        logger.warning(f"Failed to trim statement columns: {e}")
+        return df
+
+
+def trim_statement_rows(df: Any, max_periods: int) -> Any:
+    if df is None or max_periods <= 0:
+        return df
+    columns = getattr(df, "columns", None)
+    if columns is None:
+        return df
+    column_list = list(columns)
+    if not column_list:
+        return df
+    date_column = next(
+        (
+            col
+            for col in ["报告日期", "报表日期", "报告期", "date", "Date"]
+            if col in column_list
+        ),
+        None,
+    )
+    if not date_column:
+        return trim_statement_columns(df, max_periods)
+
+    try:
+        values = list(df[date_column])
+    except Exception as e:
+        logger.warning(f"Failed to access statement date column: {e}")
+        return df
+
+    dated_rows = []
+    for idx, value in enumerate(values):
+        parsed = parse_period_date(value)
+        if parsed is not None:
+            dated_rows.append((parsed, idx))
+
+    if not dated_rows:
+        return df
+
+    dated_rows.sort(key=lambda pair: pair[0], reverse=True)
+    keep_indices = sorted(idx for _, idx in dated_rows[:max_periods])
+
+    try:
+        return df.iloc[keep_indices]
+    except Exception as e:
+        logger.warning(f"Failed to trim statement rows: {e}")
+        return df
+
+
+def get_ticker_info(ticker: yf.Ticker) -> dict[str, Any]:
     """Get ticker info, trying multiple access methods."""
     # Try get_info() first (newer API)
     try:
@@ -146,7 +250,7 @@ def get_quarterly_cashflow(ticker: yf.Ticker) -> Any:
     return {}
 
 
-def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
+def fetch_yfinance(symbol: str, years: int, price_years: int) -> dict[str, Any]:
     """Fetch data from Yahoo Finance."""
     logger.info(f"Fetching yfinance data for {symbol}")
 
@@ -175,7 +279,7 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
             logger.warning(f"No price history found for {symbol}")
     except Exception as e:
         logger.error(f"Failed to fetch price history for {symbol}: {e}")
-        raise DataFetchError(f"Failed to fetch price history") from e
+        raise DataFetchError("Failed to fetch price history") from e
 
     # Get analyst data (optional, don't fail if missing)
     recommendations = getattr(ticker, "recommendations", None)
@@ -185,14 +289,26 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
     return {
         "info": info,
         "financials": {
-            "income_statement": df_to_dict(get_income_statement(ticker)),
-            "balance_sheet": df_to_dict(get_balance_sheet(ticker)),
-            "cashflow": df_to_dict(get_cashflow(ticker)),
+            "income_statement": df_to_dict(
+                trim_statement_columns(get_income_statement(ticker), years)
+            ),
+            "balance_sheet": df_to_dict(
+                trim_statement_columns(get_balance_sheet(ticker), years)
+            ),
+            "cashflow": df_to_dict(trim_statement_columns(get_cashflow(ticker), years)),
         },
         "financials_quarterly": {
-            "income_statement": df_to_dict(get_quarterly_income_statement(ticker)),
-            "balance_sheet": df_to_dict(get_quarterly_balance_sheet(ticker)),
-            "cashflow": df_to_dict(get_quarterly_cashflow(ticker)),
+            "income_statement": df_to_dict(
+                trim_statement_columns(
+                    get_quarterly_income_statement(ticker), years * 4
+                )
+            ),
+            "balance_sheet": df_to_dict(
+                trim_statement_columns(get_quarterly_balance_sheet(ticker), years * 4)
+            ),
+            "cashflow": df_to_dict(
+                trim_statement_columns(get_quarterly_cashflow(ticker), years * 4)
+            ),
         },
         "price_history": df_to_dict(history),
         "analyst": {
@@ -203,7 +319,7 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
     }
 
 
-def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
+def fetch_cn(symbol: str, years: int) -> dict[str, Any]:
     """Fetch data for Chinese A-share stocks."""
     code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
     logger.info(f"Fetching CN market data for {code}")
@@ -213,19 +329,25 @@ def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
 
     # Fetch financial statements
     try:
-        income = ak.stock_financial_report_sina(stock=code, symbol="利润表")
+        income = trim_statement_rows(
+            ak.stock_financial_report_sina(stock=code, symbol="利润表"), years
+        )
     except Exception as e:
         logger.error(f"Failed to fetch income statement for {code}: {e}")
         raise DataFetchError(f"Failed to fetch income statement for {symbol}") from e
 
     try:
-        balance = ak.stock_financial_report_sina(stock=code, symbol="资产负债表")
+        balance = trim_statement_rows(
+            ak.stock_financial_report_sina(stock=code, symbol="资产负债表"), years
+        )
     except Exception as e:
         logger.error(f"Failed to fetch balance sheet for {code}: {e}")
         raise DataFetchError(f"Failed to fetch balance sheet for {symbol}") from e
 
     try:
-        cashflow = ak.stock_financial_report_sina(stock=code, symbol="现金流量表")
+        cashflow = trim_statement_rows(
+            ak.stock_financial_report_sina(stock=code, symbol="现金流量表"), years
+        )
     except Exception as e:
         logger.error(f"Failed to fetch cashflow for {code}: {e}")
         raise DataFetchError(f"Failed to fetch cashflow for {symbol}") from e
@@ -258,7 +380,7 @@ def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
 
 def fetch_data(
     symbol: str, market: str, years: int, price_years: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if market in {"US", "HK", "JP"}:
         return fetch_yfinance(symbol, years, price_years)
     if market == "CN":
@@ -282,8 +404,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    from logging_config import setup_logging
     from exceptions import format_error_for_user
+    from logging_config import setup_logging
 
     # Set up logging
     _, _ = setup_logging(log_level="INFO", log_to_file=True)
@@ -304,7 +426,9 @@ def main() -> None:
             {
                 "symbol": symbol,
                 "market": market,
-                "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "fetched_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
             }
         )
 
@@ -315,14 +439,12 @@ def main() -> None:
             json.dump(payload, handle, ensure_ascii=False, indent=2, default=str)
 
         logger.info(f"Successfully saved data to {output_path}")
-        print(f"✓ Saved data to {output_path}")
 
     except (DataFetchError, SymbolNotFoundError, APIError) as e:
-        print(format_error_for_user(e))
+        logger.error(format_error_for_user(e))
         exit(1)
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        print(f"❌ Unexpected error: {e}")
         exit(1)
 
 

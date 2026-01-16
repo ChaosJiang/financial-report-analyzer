@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Utility helpers for date-series handling with polars."""
 
-from __future__ import annotations
-
-from datetime import date, datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
 import math
+from collections.abc import Iterable
+from datetime import date, datetime, timezone
+from typing import Any
 
 import polars as pl
 
 
-def parse_datetime(value: Any) -> Optional[datetime]:
+def parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -26,7 +25,12 @@ def parse_datetime(value: Any) -> Optional[datetime]:
             parsed = datetime.fromisoformat(raw)
         except ValueError:
             parsed = None
-            for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", "%Y/%m/%d %H:%M:%S"):
+            for fmt in (
+                "%Y-%m-%d",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y/%m/%d",
+                "%Y/%m/%d %H:%M:%S",
+            ):
                 try:
                     parsed = datetime.strptime(raw, fmt)
                     break
@@ -42,7 +46,7 @@ def parse_datetime(value: Any) -> Optional[datetime]:
     return parsed
 
 
-def to_float(value: Any) -> Optional[float]:
+def to_float(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -71,10 +75,10 @@ def empty_series() -> pl.DataFrame:
     )
 
 
-def series_from_mapping(mapping: Dict[str, Any]) -> pl.DataFrame:
+def series_from_mapping(mapping: dict[str, Any]) -> pl.DataFrame:
     if not mapping:
         return empty_series()
-    rows: List[Tuple[datetime, Optional[float]]] = []
+    rows: list[tuple[datetime, float | None]] = []
     for key, value in mapping.items():
         parsed = parse_datetime(key)
         if parsed is None:
@@ -87,9 +91,9 @@ def series_from_mapping(mapping: Dict[str, Any]) -> pl.DataFrame:
 
 
 def series_from_rows(
-    rows: Iterable[Dict[str, Any]], date_key: str, value_key: str
+    rows: Iterable[dict[str, Any]], date_key: str, value_key: str
 ) -> pl.DataFrame:
-    series_rows: List[Tuple[datetime, Optional[float]]] = []
+    series_rows: list[tuple[datetime, float | None]] = []
     for row in rows:
         parsed = parse_datetime(row.get(date_key))
         if parsed is None:
@@ -101,14 +105,14 @@ def series_from_rows(
     return df.drop_nulls().sort("date")
 
 
-def series_rows(series: pl.DataFrame) -> List[Tuple[datetime, float]]:
+def series_rows(series: pl.DataFrame) -> list[tuple[datetime, float]]:
     if series is None or series.height == 0:
         return []
     df = series.drop_nulls().sort("date").filter(pl.col("value").is_finite())
     return [(row[0], float(row[1])) for row in df.select(["date", "value"]).iter_rows()]
 
 
-def series_to_dict(series: pl.DataFrame) -> Dict[str, float]:
+def series_to_dict(series: pl.DataFrame) -> dict[str, float]:
     rows = series_rows(series)
     if not rows:
         return {}
@@ -118,7 +122,7 @@ def series_to_dict(series: pl.DataFrame) -> Dict[str, float]:
     }
 
 
-def latest_value(series: pl.DataFrame) -> Optional[float]:
+def latest_value(series: pl.DataFrame) -> float | None:
     rows = series_rows(series)
     if not rows:
         return None
@@ -126,20 +130,20 @@ def latest_value(series: pl.DataFrame) -> Optional[float]:
 
 
 def rows_from_payload(
-    payload: Dict[str, Dict[str, Any]], row_key: Optional[str] = None
-) -> List[Dict[str, Any]]:
+    payload: dict[str, dict[str, Any]], row_key: str | None = None
+) -> list[dict[str, Any]]:
     if not payload:
         return []
-    row_ids: List[str] = []
+    row_ids: list[str] = []
     if row_key and row_key in payload and isinstance(payload[row_key], dict):
         row_ids = list(payload[row_key].keys())
     if not row_ids:
         first_key = next(iter(payload), None)
         if first_key and isinstance(payload.get(first_key), dict):
             row_ids = list(payload[first_key].keys())
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for row_id in row_ids:
-        row: Dict[str, Any] = {}
+        row: dict[str, Any] = {}
         for column, column_map in payload.items():
             if isinstance(column_map, dict):
                 row[column] = column_map.get(row_id)

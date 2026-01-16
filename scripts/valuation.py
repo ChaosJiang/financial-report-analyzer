@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Compute valuation metrics and historical percentiles."""
 
-from __future__ import annotations
-
 import argparse
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Iterable
+from typing import Any
 
 import numpy as np
 import polars as pl
 import yfinance as yf
-
+from logging_config import get_module_logger
 from series_utils import (
     empty_series,
     latest_value,
@@ -21,17 +20,15 @@ from series_utils import (
     series_rows,
     series_to_dict,
 )
-from logging_config import get_module_logger
-from exceptions import CurrencyConversionError
 
 logger = get_module_logger()
 
 
-def to_series(data: Dict[str, Any]) -> pl.DataFrame:
+def to_series(data: dict[str, Any]) -> pl.DataFrame:
     return series_from_mapping(data or {})
 
 
-def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
+def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> str | None:
     lookup = {str(key).lower(): str(key) for key in keys}
     for candidate in candidates:
         lowered = candidate.lower()
@@ -40,7 +37,7 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optiona
     return None
 
 
-def to_price_series(payload: Dict[str, Any]) -> pl.DataFrame:
+def to_price_series(payload: dict[str, Any]) -> pl.DataFrame:
     price_payload = payload.get("price_history", {}) or {}
     if not price_payload:
         return empty_series()
@@ -80,7 +77,7 @@ def align_to_prices(snapshot: pl.DataFrame, prices: pl.DataFrame) -> pl.DataFram
     return aligned.select(["date", "snapshot"]).rename({"snapshot": "value"})
 
 
-def fetch_fx_rate(base: Optional[str], quote: Optional[str]) -> Optional[float]:
+def fetch_fx_rate(base: str | None, quote: str | None) -> float | None:
     """
     Fetch currency exchange rate from base to quote currency.
 
@@ -140,7 +137,7 @@ def fetch_fx_rate(base: Optional[str], quote: Optional[str]) -> Optional[float]:
 
 
 def convert_series(
-    series: pl.DataFrame, fx_rate: Optional[float], apply_conversion: bool
+    series: pl.DataFrame, fx_rate: float | None, apply_conversion: bool
 ) -> pl.DataFrame:
     if series.height == 0 or not apply_conversion:
         return series
@@ -149,7 +146,7 @@ def convert_series(
     return series.with_columns((pl.col("value") * fx_rate).alias("value"))
 
 
-def percentile(current: Optional[float], history: pl.DataFrame) -> Optional[float]:
+def percentile(current: float | None, history: pl.DataFrame) -> float | None:
     if current is None or history.height == 0:
         return None
     values = [
@@ -205,14 +202,14 @@ def multiply_series(left: pl.DataFrame, right: pl.DataFrame) -> pl.DataFrame:
 
 
 def compute_dcf(
-    free_cash_flow: Optional[float],
-    net_debt: Optional[float],
-    shares_outstanding: Optional[float],
+    free_cash_flow: float | None,
+    net_debt: float | None,
+    shares_outstanding: float | None,
     discount_rate: float = 0.1,
     growth_rate: float = 0.05,
     terminal_growth: float = 0.02,
     years: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if free_cash_flow is None or free_cash_flow <= 0:
         return {}
 
@@ -228,7 +225,7 @@ def compute_dcf(
     pv_terminal = terminal_value / (1 + discount_rate) ** years
     enterprise_value = pv + pv_terminal
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "assumptions": {
             "discount_rate": discount_rate,
             "growth_rate": growth_rate,
@@ -248,14 +245,16 @@ def compute_dcf(
     return result
 
 
-def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
+def build_valuation(data: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
     """Build valuation metrics from financial data and analysis."""
     info = data.get("info", {}) or {}
     market_currency = info.get("currency")
     financial_currency = info.get("financialCurrency") or market_currency
 
     logger.info(f"Building valuation for {analysis.get('symbol')}")
-    logger.debug(f"Market currency: {market_currency}, Financial currency: {financial_currency}")
+    logger.debug(
+        f"Market currency: {market_currency}, Financial currency: {financial_currency}"
+    )
 
     price_series = to_price_series(data)
 
@@ -265,7 +264,7 @@ def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str,
 
     # Handle currency conversion
     if currency_mismatch:
-        logger.info(f"Currency mismatch detected, fetching exchange rate")
+        logger.info("Currency mismatch detected, fetching exchange rate")
         fx_rate = fetch_fx_rate(financial_currency, market_currency)
         if fx_rate is None:
             logger.warning(
@@ -326,11 +325,12 @@ def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str,
         "ev_to_ebitda": latest_value(ev_to_ebitda_daily),
     }
 
-    metric_dates = {
-        dt for dt, _ in series_rows(pe_daily)
-    } | {dt for dt, _ in series_rows(ps_daily)} | {dt for dt, _ in series_rows(pb_daily)} | {
-        dt for dt, _ in series_rows(ev_to_ebitda_daily)
-    }
+    metric_dates = (
+        {dt for dt, _ in series_rows(pe_daily)}
+        | {dt for dt, _ in series_rows(ps_daily)}
+        | {dt for dt, _ in series_rows(pb_daily)}
+        | {dt for dt, _ in series_rows(ev_to_ebitda_daily)}
+    )
     window_start = min(metric_dates) if metric_dates else None
 
     fcf_ttm_total = to_series(
@@ -353,8 +353,8 @@ def build_valuation(data: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str,
         "window": {
             "start": str(window_start.date()) if window_start is not None else None,
             "end": str(latest_date.date()) if latest_date is not None else None,
-            "price_points": int(len(price_rows)),
-            "valuation_days": int(len(metric_dates)),
+            "price_points": len(price_rows),
+            "valuation_days": len(metric_dates),
             "snapshot_points": {
                 "eps_ttm": int(eps_ttm.height),
                 "sales_ttm": int(sales_ttm.height),
@@ -409,8 +409,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    from logging_config import setup_logging
     import os
+
+    from logging_config import setup_logging
 
     # Set up logging
     _, _ = setup_logging(log_level="INFO", log_to_file=True)
@@ -419,35 +420,33 @@ def main() -> None:
 
     try:
         logger.info(f"Loading data from {args.input}")
-        with open(args.input, "r", encoding="utf-8") as handle:
+        with open(args.input, encoding="utf-8") as handle:
             data = json.load(handle)
 
         logger.info(f"Loading analysis from {args.analysis}")
-        with open(args.analysis, "r", encoding="utf-8") as handle:
+        with open(args.analysis, encoding="utf-8") as handle:
             analysis = json.load(handle)
 
         valuation = build_valuation(data, analysis)
 
         os.makedirs(args.output, exist_ok=True)
-        output_path = f"{args.output}/{analysis['symbol'].replace('.', '_')}_valuation.json"
+        output_path = (
+            f"{args.output}/{analysis['symbol'].replace('.', '_')}_valuation.json"
+        )
 
         with open(output_path, "w", encoding="utf-8") as handle:
             json.dump(valuation, handle, ensure_ascii=False, indent=2)
 
         logger.info(f"Successfully saved valuation to {output_path}")
-        print(f"✓ Saved valuation to {output_path}")
 
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
-        print(f"❌ Error: {e}")
         exit(1)
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON file: {e}")
-        print(f"❌ Error: Invalid JSON in input file")
         exit(1)
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        print(f"❌ Unexpected error: {e}")
         exit(1)
 
 
