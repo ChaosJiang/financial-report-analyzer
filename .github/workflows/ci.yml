@@ -22,10 +22,7 @@ jobs:
         run: |
           ruff check scripts/ \
             --select E,F,W,I,N,UP,YTT,ASYNC,S,BLE,B,A,COM,C4,DTZ,T10,EM,ISC,G,PIE,PYI,RSE,RET,SIM,TID,TCH,ARG,PTH,PD,PGH,PL,TRY,NPY,RUF \
-            --ignore \
-              E501, \
-              COM812, \
-              ISC001 \
+            --ignore E501,COM812,ISC001 \
             --output-format=github
 
       - name: Run Ruff formatter check
