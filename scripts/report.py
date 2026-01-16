@@ -162,6 +162,80 @@ def build_analyst_section(analyst: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_data_quality_section(analysis: Dict[str, Any]) -> str:
+    """Build data quality appendix section."""
+    dq = analysis.get("data_quality", {})
+    if not dq:
+        return ""
+
+    validation = dq.get("validation", {})
+    field_matching = dq.get("field_matching", {})
+
+    lines = ["## 附录：数据质量说明", ""]
+
+    # Validation summary
+    total_checks = validation.get("total_checks", 0)
+    passed = validation.get("passed", 0)
+    failed = validation.get("failed", 0)
+
+    if total_checks > 0:
+        lines.append(f"### 数据验证")
+        lines.append(f"- 总验证检查: {total_checks}")
+        lines.append(f"- 通过: {passed}")
+        if failed > 0:
+            lines.append(f"- **警告: {failed}**")
+
+            # Show validation details
+            results = validation.get("results", [])
+            warnings = [r for r in results if not r.get("passed")]
+            if warnings:
+                lines.append("")
+                lines.append("**验证警告详情:**")
+                for warning in warnings[:5]:  # Show first 5
+                    lines.append(f"- {warning.get('message', 'Unknown warning')}")
+                if len(warnings) > 5:
+                    lines.append(f"- ... 还有 {len(warnings) - 5} 个警告")
+        lines.append("")
+
+    # Field matching summary
+    fuzzy_matches = field_matching.get("fuzzy_matches", 0)
+    missing_fields = field_matching.get("missing_fields", 0)
+
+    if fuzzy_matches > 0 or missing_fields > 0:
+        lines.append(f"### 字段匹配")
+        if fuzzy_matches > 0:
+            lines.append(f"- 模糊匹配字段数: {fuzzy_matches}")
+            lines.append("  * 某些财务字段使用了模糊匹配算法，可能存在匹配错误")
+
+            # Show fuzzy match details
+            fuzzy_details = field_matching.get("fuzzy_matches_detail", [])
+            if fuzzy_details:
+                lines.append("")
+                lines.append("**模糊匹配详情:**")
+                for match in fuzzy_details[:5]:  # Show first 5
+                    field = match.get("field", "?")
+                    matched = match.get("matched", "?")
+                    confidence = match.get("confidence", 0)
+                    lines.append(f"- '{field}' → '{matched}' (置信度: {confidence:.2f})")
+                if len(fuzzy_details) > 5:
+                    lines.append(f"- ... 还有 {len(fuzzy_details) - 5} 个模糊匹配")
+
+        if missing_fields > 0:
+            lines.append(f"- 缺失字段数: {missing_fields}")
+            lines.append("  * 某些预期的财务字段在数据源中未找到")
+
+        lines.append("")
+
+    # Data completeness note
+    lines.append("### 数据完整性")
+    lines.append("- 本报告基于公开数据源生成")
+    lines.append("- 财务数据可能存在延迟或不完整")
+    lines.append("- 建议结合官方财报进行验证")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def build_report(
     analysis: Dict[str, Any], valuation: Dict[str, Any], analyst: Dict[str, Any]
 ) -> str:
@@ -207,7 +281,13 @@ def build_report(
         "",
         "## 八、投资建议",
         "- （基于基本面优先的综合建议，由 AI 生成）",
+        "",
     ]
+
+    # Add data quality section if available
+    dq_section = build_data_quality_section(analysis)
+    if dq_section:
+        report_lines.extend(["", dq_section])
 
     return "\n".join(report_lines)
 
