@@ -7,7 +7,7 @@ import argparse
 import json
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any
 
 from series_utils import parse_datetime
 
@@ -27,7 +27,7 @@ def grade_bucket(grade: str) -> str:
     return "other"
 
 
-def summarize_recommendations(recommendations: Dict[str, Any]) -> Dict[str, int]:
+def summarize_recommendations(recommendations: dict[str, Any]) -> dict[str, int]:
     if not recommendations or not isinstance(recommendations, dict):
         return {}
     grades = recommendations.get("To Grade", {})
@@ -74,10 +74,10 @@ def normalize_summary_value(value: Any) -> Any:
     return str(value)
 
 
-def summarize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+def summarize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     if not summary or not isinstance(summary, dict):
         return {}
-    latest: Dict[str, Any] = {}
+    latest: dict[str, Any] = {}
     for key, column_map in summary.items():
         if isinstance(column_map, dict) and column_map:
             value = next(iter(column_map.values()))
@@ -87,7 +87,7 @@ def summarize_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     return latest
 
 
-def build_analyst_report(data: Dict[str, Any]) -> Dict[str, Any]:
+def build_analyst_report(data: dict[str, Any]) -> dict[str, Any]:
     info = data.get("info", {}) or {}
     analyst = data.get("analyst", {}) or {}
 
