@@ -16,6 +16,12 @@ import report as report_module
 import valuation as valuation_module
 import visualize as visualize_module
 
+from logging_config import get_module_logger, setup_logging
+from progress import progress, step_progress
+from exceptions import format_error_for_user, FinancialReportError
+
+logger = get_module_logger()
+
 
 CHART_FILES = [
     "revenue_net_income.png",
@@ -107,6 +113,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Force refetch data even if cache is fresh.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview operations without executing (no API calls, no file writes)",
+    )
     parser.add_argument("--skip-valuation", action="store_true")
     parser.add_argument("--skip-analyst", action="store_true")
     parser.add_argument("--skip-charts", action="store_true")
@@ -115,97 +126,223 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Set up logging
+    _, dq_logger = setup_logging(log_level="INFO", log_to_file=True)
+    analyze_module.data_quality_logger = dq_logger
+
     args = parse_args()
-    symbol = fetch_data_module.normalize_symbol(args.symbol)
-    market = (args.market or fetch_data_module.infer_market(symbol)).upper()
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_symbol = symbol.replace(".", "_")
-    data_path = output_dir / f"{safe_symbol}_data.json"
-    analysis_path = output_dir / f"{safe_symbol}_analysis.json"
-    valuation_path = output_dir / f"{safe_symbol}_valuation.json"
-    analyst_path = output_dir / f"{safe_symbol}_analyst.json"
-    report_path = output_dir / f"{safe_symbol}_report.md"
-    charts_dir = output_dir / f"{safe_symbol}_charts"
+    try:
+        symbol = fetch_data_module.normalize_symbol(args.symbol)
+        market = (args.market or fetch_data_module.infer_market(symbol)).upper()
+        output_dir = Path(args.output)
 
-    price_years = args.price_years
-    if price_years is None:
-        price_years = max(args.years, 6)
+        safe_symbol = symbol.replace(".", "_")
+        data_path = output_dir / f"{safe_symbol}_data.json"
+        analysis_path = output_dir / f"{safe_symbol}_analysis.json"
+        valuation_path = output_dir / f"{safe_symbol}_valuation.json"
+        analyst_path = output_dir / f"{safe_symbol}_analyst.json"
+        report_path = output_dir / f"{safe_symbol}_report.md"
+        charts_dir = output_dir / f"{safe_symbol}_charts"
 
-    if not args.refresh and is_fresh(data_path, args.max_age_hours):
-        data_payload = read_json(data_path)
-        print(f"Using cached data: {data_path}")
-    else:
-        data_payload = fetch_data_module.fetch_data(
-            symbol, market, args.years, price_years
-        )
-        data_payload.update(
-            {
-                "symbol": symbol,
-                "market": market,
-                "fetched_at": datetime.now(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
-            }
-        )
-        write_json(data_path, data_payload)
-        print(f"Saved data to {data_path}")
+        price_years = args.price_years
+        if price_years is None:
+            price_years = max(args.years, 6)
 
-    data_mtime = data_path.stat().st_mtime
+        # Dry-run mode: preview operations
+        if args.dry_run:
+            print(f"\n{'='*60}")
+            print(f"DRY RUN MODE - Preview of operations for {symbol}")
+            print(f"{'='*60}\n")
+            print(f"Symbol: {symbol}")
+            print(f"Market: {market}")
+            print(f"Output directory: {output_dir}")
+            print(f"\nOperations that would be performed:")
 
-    if needs_update(analysis_path, [data_mtime]):
-        analysis_payload = analyze_module.build_analysis(data_payload)
-        write_json(analysis_path, analysis_payload)
-        print(f"Saved analysis to {analysis_path}")
-    else:
-        analysis_payload = read_json(analysis_path)
-        print(f"Using cached analysis: {analysis_path}")
+            if not args.refresh and is_fresh(data_path, args.max_age_hours):
+                data_payload = read_json(data_path)
+                fetched_at = parse_iso_datetime(data_payload.get("fetched_at"))
+                if fetched_at is None:
+                    fetched_at = datetime.fromtimestamp(
+                        data_path.stat().st_mtime, tz=timezone.utc
+                    )
+                age_hours = hours_since(fetched_at)
+                print(f"  • Use cached data (age: {age_hours:.1f} hours)")
+            else:
+                print(f"  • Fetch data from {market} market for {symbol}")
 
-    analysis_mtime = analysis_path.stat().st_mtime
+            print(f"  • Analyze financial data")
 
-    valuation_payload: Dict[str, Any] = {}
-    if not args.skip_valuation:
-        if needs_update(valuation_path, [data_mtime, analysis_mtime]):
-            valuation_payload = valuation_module.build_valuation(
-                data_payload, analysis_payload
-            )
-            write_json(valuation_path, valuation_payload)
-            print(f"Saved valuation to {valuation_path}")
-        else:
-            valuation_payload = read_json(valuation_path)
-            print(f"Using cached valuation: {valuation_path}")
+            if not args.skip_valuation:
+                print(f"  • Compute valuation metrics")
 
-    analyst_payload: Dict[str, Any] = {}
-    if not args.skip_analyst:
-        if needs_update(analyst_path, [data_mtime]):
-            analyst_payload = analyst_module.build_analyst_report(data_payload)
-            write_json(analyst_path, analyst_payload)
-            print(f"Saved analyst report to {analyst_path}")
-        else:
-            analyst_payload = read_json(analyst_path)
-            print(f"Using cached analyst report: {analyst_path}")
+            if not args.skip_analyst:
+                print(f"  • Extract analyst recommendations")
 
-    if not args.skip_charts:
-        if charts_need_update(charts_dir, analysis_mtime):
-            visualize_module.generate_charts(analysis_payload, str(charts_dir))
-        else:
-            print(f"Using cached charts: {charts_dir}")
+            if not args.skip_charts:
+                print(f"  • Generate {len(CHART_FILES)} charts")
 
-    if not args.skip_report:
-        report_inputs = [analysis_mtime]
-        if not args.skip_valuation and valuation_path.exists():
-            report_inputs.append(valuation_path.stat().st_mtime)
-        if not args.skip_analyst and analyst_path.exists():
-            report_inputs.append(analyst_path.stat().st_mtime)
-        if needs_update(report_path, report_inputs):
-            report_text = report_module.build_report(
-                analysis_payload, valuation_payload, analyst_payload
-            )
-            report_path.write_text(report_text, encoding="utf-8")
-            print(f"Saved report to {report_path}")
-        else:
-            print(f"Using cached report: {report_path}")
+            if not args.skip_report:
+                print(f"  • Generate markdown report")
+
+            print(f"\nNo files will be modified in dry-run mode.")
+            print(f"Run without --dry-run to execute these operations.\n")
+            return
+
+        # Calculate total steps for progress tracking
+        total_steps = 1  # fetch/use cache
+        total_steps += 1  # analyze
+        if not args.skip_valuation:
+            total_steps += 1
+        if not args.skip_analyst:
+            total_steps += 1
+        if not args.skip_charts:
+            total_steps += 1
+        if not args.skip_report:
+            total_steps += 1
+
+        logger.info(f"Starting report pipeline for {symbol} ({market})")
+
+        with step_progress(total_steps) as sp:
+            # Create output directory
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Step 1: Fetch or use cached data
+            use_cache = not args.refresh and is_fresh(data_path, args.max_age_hours)
+
+            if use_cache:
+                with sp.step(f"Loading cached data for {symbol}"):
+                    data_payload = read_json(data_path)
+                    fetched_at = parse_iso_datetime(data_payload.get("fetched_at"))
+                    if fetched_at:
+                        age_hours = hours_since(fetched_at)
+                        print(f"    Using cache (fetched {age_hours:.1f} hours ago): {data_path}")
+                    else:
+                        print(f"    Using cached data: {data_path}")
+            else:
+                with sp.step(f"Fetching {symbol} from {market} market"):
+                    data_payload = fetch_data_module.fetch_data(
+                        symbol, market, args.years, price_years
+                    )
+                    data_payload.update(
+                        {
+                            "symbol": symbol,
+                            "market": market,
+                            "fetched_at": datetime.now(timezone.utc)
+                            .isoformat()
+                            .replace("+00:00", "Z"),
+                        }
+                    )
+                    write_json(data_path, data_payload)
+                    print(f"    Saved to: {data_path}")
+
+            data_mtime = data_path.stat().st_mtime
+
+            # Step 2: Analyze financial data
+            with sp.step("Analyzing financial metrics"):
+                if needs_update(analysis_path, [data_mtime]):
+                    analysis_payload = analyze_module.build_analysis(data_payload)
+                    write_json(analysis_path, analysis_payload)
+                    print(f"    Saved to: {analysis_path}")
+                else:
+                    analysis_payload = read_json(analysis_path)
+                    print(f"    Using cache: {analysis_path}")
+
+            analysis_mtime = analysis_path.stat().st_mtime
+
+            # Step 3: Compute valuation
+            valuation_payload: Dict[str, Any] = {}
+            if not args.skip_valuation:
+                with sp.step("Computing valuation metrics"):
+                    if needs_update(valuation_path, [data_mtime, analysis_mtime]):
+                        valuation_payload = valuation_module.build_valuation(
+                            data_payload, analysis_payload
+                        )
+                        write_json(valuation_path, valuation_payload)
+                        print(f"    Saved to: {valuation_path}")
+                    else:
+                        valuation_payload = read_json(valuation_path)
+                        print(f"    Using cache: {valuation_path}")
+
+            # Step 4: Extract analyst data
+            analyst_payload: Dict[str, Any] = {}
+            if not args.skip_analyst:
+                with sp.step("Extracting analyst recommendations"):
+                    if needs_update(analyst_path, [data_mtime]):
+                        analyst_payload = analyst_module.build_analyst_report(data_payload)
+                        write_json(analyst_path, analyst_payload)
+                        print(f"    Saved to: {analyst_path}")
+                    else:
+                        analyst_payload = read_json(analyst_path)
+                        print(f"    Using cache: {analyst_path}")
+
+            # Step 5: Generate charts
+            if not args.skip_charts:
+                with sp.step(f"Generating charts"):
+                    if charts_need_update(charts_dir, analysis_mtime):
+                        visualize_module.generate_charts(analysis_payload, str(charts_dir))
+                        print(f"    Saved to: {charts_dir}")
+                    else:
+                        print(f"    Using cache: {charts_dir}")
+
+            # Step 6: Generate report
+            if not args.skip_report:
+                with sp.step("Generating markdown report"):
+                    report_inputs = [analysis_mtime]
+                    if not args.skip_valuation and valuation_path.exists():
+                        report_inputs.append(valuation_path.stat().st_mtime)
+                    if not args.skip_analyst and analyst_path.exists():
+                        report_inputs.append(analyst_path.stat().st_mtime)
+                    if needs_update(report_path, report_inputs):
+                        report_text = report_module.build_report(
+                            analysis_payload, valuation_payload, analyst_payload
+                        )
+                        report_path.write_text(report_text, encoding="utf-8")
+                        print(f"    Saved to: {report_path}")
+                    else:
+                        print(f"    Using cache: {report_path}")
+
+        # Print summary
+        print(f"\n{'='*60}")
+        print(f"Report generation complete for {symbol}")
+        print(f"{'='*60}")
+        company_name = analysis_payload.get("company", {}).get("name", symbol)
+        print(f"Company: {company_name}")
+        industry = analysis_payload.get("company", {}).get("industry")
+        if industry:
+            print(f"Industry: {industry}")
+
+        latest_price = analysis_payload.get("price", {}).get("latest")
+        currency = analysis_payload.get("company", {}).get("currency")
+        if latest_price and currency:
+            print(f"Latest Price: {latest_price:.2f} {currency}")
+
+        # Show data quality warnings
+        dq = analysis_payload.get("data_quality", {})
+        validation = dq.get("validation", {})
+        field_matching = dq.get("field_matching", {})
+
+        if validation.get("failed", 0) > 0 or field_matching.get("fuzzy_matches", 0) > 0:
+            print(f"\n⚠️  Data Quality Warnings:")
+            if validation.get("failed", 0) > 0:
+                print(f"  • {validation['failed']} validation checks failed")
+            if field_matching.get("fuzzy_matches", 0) > 0:
+                print(f"  • {field_matching['fuzzy_matches']} fields matched using fuzzy matching")
+
+        print(f"\nReport saved to: {report_path}")
+        print(f"{'='*60}\n")
+
+    except FinancialReportError as e:
+        print(format_error_for_user(e))
+        exit(1)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Operation cancelled by user")
+        exit(130)
+    except Exception as e:
+        logger.error(f"Unexpected error in report pipeline: {e}", exc_info=True)
+        print(f"❌ Unexpected error: {e}")
+        print(f"\nCheck logs for more details.")
+        exit(1)
 
 
 if __name__ == "__main__":

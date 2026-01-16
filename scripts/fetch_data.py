@@ -13,6 +13,15 @@ import numpy as np
 import yfinance as yf
 import akshare as ak
 
+from logging_config import get_module_logger
+from exceptions import (
+    DataFetchError,
+    APIError,
+    SymbolNotFoundError,
+)
+
+logger = get_module_logger()
+
 
 def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
@@ -30,12 +39,19 @@ def infer_market(symbol: str) -> str:
 
 
 def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
+    """Convert DataFrame to dict, handling various edge cases."""
     if df is None or getattr(df, "empty", False):
         return {}
+
     try:
         sanitized = df.copy()
-    except Exception:
-        return {}
+    except AttributeError as e:
+        logger.error(f"Failed to copy dataframe: {e}")
+        raise DataFetchError("Invalid dataframe object") from e
+    except Exception as e:
+        logger.error(f"Unexpected error copying dataframe: {e}", exc_info=True)
+        raise DataFetchError("Failed to process dataframe") from e
+
     try:
         if hasattr(sanitized, "columns"):
             sanitized.columns = [str(col) for col in sanitized.columns]
@@ -43,24 +59,41 @@ def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
             sanitized.index = [str(idx) for idx in sanitized.index]
         if hasattr(sanitized, "replace"):
             sanitized = sanitized.replace({np.nan: None})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to sanitize dataframe fields: {e}")
+        # Continue with unsanitized data
+
     if hasattr(sanitized, "to_dict"):
         try:
             return sanitized.to_dict()
-        except Exception:
-            return {}
+        except Exception as e:
+            logger.error(f"Failed to convert dataframe to dict: {e}", exc_info=True)
+            raise DataFetchError("Failed to serialize dataframe") from e
+
+    logger.warning("Object is not a dataframe, returning empty dict")
     return {}
 
 
 def get_ticker_info(ticker: yf.Ticker) -> Dict[str, Any]:
+    """Get ticker info, trying multiple access methods."""
+    # Try get_info() first (newer API)
     try:
         return ticker.get_info()
-    except Exception:
-        try:
-            return ticker.info
-        except Exception:
-            return {}
+    except AttributeError:
+        # Method doesn't exist, try direct attribute access
+        pass
+    except Exception as e:
+        logger.warning(f"Failed to get ticker info via get_info(): {e}")
+
+    # Try direct info attribute (older API)
+    try:
+        return ticker.info
+    except AttributeError:
+        logger.error("Ticker object has no info attribute or get_info() method")
+        raise DataFetchError("Unable to retrieve ticker information") from None
+    except Exception as e:
+        logger.error(f"Failed to get ticker info: {e}", exc_info=True)
+        raise DataFetchError("Failed to retrieve ticker information") from e
 
 
 def get_income_statement(ticker: yf.Ticker) -> Any:
@@ -114,14 +147,43 @@ def get_quarterly_cashflow(ticker: yf.Ticker) -> Any:
 
 
 def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
-    ticker = yf.Ticker(symbol)
-    history = ticker.history(period=f"{price_years}y", auto_adjust=False)
+    """Fetch data from Yahoo Finance."""
+    logger.info(f"Fetching yfinance data for {symbol}")
+
+    try:
+        ticker = yf.Ticker(symbol)
+    except Exception as e:
+        logger.error(f"Failed to create yfinance Ticker for {symbol}: {e}")
+        raise DataFetchError(f"Failed to initialize ticker: {symbol}") from e
+
+    # Get ticker info first to validate symbol exists
+    try:
+        info = get_ticker_info(ticker)
+        if not info:
+            raise SymbolNotFoundError(symbol)
+    except DataFetchError:
+        # Re-raise our own exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Error getting ticker info for {symbol}: {e}", exc_info=True)
+        raise DataFetchError(f"Failed to retrieve info for {symbol}") from e
+
+    # Fetch price history
+    try:
+        history = ticker.history(period=f"{price_years}y", auto_adjust=False)
+        if history.empty:
+            logger.warning(f"No price history found for {symbol}")
+    except Exception as e:
+        logger.error(f"Failed to fetch price history for {symbol}: {e}")
+        raise DataFetchError(f"Failed to fetch price history") from e
+
+    # Get analyst data (optional, don't fail if missing)
     recommendations = getattr(ticker, "recommendations", None)
     recommendations_summary = getattr(ticker, "recommendations_summary", None)
     analyst_price_target = getattr(ticker, "analyst_price_target", None)
 
     return {
-        "info": get_ticker_info(ticker),
+        "info": info,
         "financials": {
             "income_statement": df_to_dict(get_income_statement(ticker)),
             "balance_sheet": df_to_dict(get_balance_sheet(ticker)),
@@ -142,16 +204,45 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
 
 
 def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
+    """Fetch data for Chinese A-share stocks."""
     code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+    logger.info(f"Fetching CN market data for {code}")
+
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=years * 365)).strftime("%Y%m%d")
 
-    income = ak.stock_financial_report_sina(stock=code, symbol="利润表")
-    balance = ak.stock_financial_report_sina(stock=code, symbol="资产负债表")
-    cashflow = ak.stock_financial_report_sina(stock=code, symbol="现金流量表")
-    history = ak.stock_zh_a_hist(
-        symbol=code, period="daily", start_date=start_date, end_date=end_date
-    )
+    # Fetch financial statements
+    try:
+        income = ak.stock_financial_report_sina(stock=code, symbol="利润表")
+    except Exception as e:
+        logger.error(f"Failed to fetch income statement for {code}: {e}")
+        raise DataFetchError(f"Failed to fetch income statement for {symbol}") from e
+
+    try:
+        balance = ak.stock_financial_report_sina(stock=code, symbol="资产负债表")
+    except Exception as e:
+        logger.error(f"Failed to fetch balance sheet for {code}: {e}")
+        raise DataFetchError(f"Failed to fetch balance sheet for {symbol}") from e
+
+    try:
+        cashflow = ak.stock_financial_report_sina(stock=code, symbol="现金流量表")
+    except Exception as e:
+        logger.error(f"Failed to fetch cashflow for {code}: {e}")
+        raise DataFetchError(f"Failed to fetch cashflow for {symbol}") from e
+
+    # Fetch price history
+    try:
+        history = ak.stock_zh_a_hist(
+            symbol=code, period="daily", start_date=start_date, end_date=end_date
+        )
+        if history.empty:
+            logger.warning(f"No price history found for {code}")
+            raise SymbolNotFoundError(symbol, market="CN")
+    except SymbolNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch price history for {code}: {e}", exc_info=True)
+        raise DataFetchError(f"Failed to fetch price history for {symbol}") from e
 
     return {
         "info": {},
@@ -191,29 +282,48 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    from logging_config import setup_logging
+    from exceptions import format_error_for_user
+
+    # Set up logging
+    _, _ = setup_logging(log_level="INFO", log_to_file=True)
+
     args = parse_args()
     symbol = normalize_symbol(args.symbol)
     market = (args.market or infer_market(symbol)).upper()
+
+    logger.info(f"Fetching data for {symbol} (Market: {market})")
 
     price_years = args.price_years
     if price_years is None:
         price_years = max(args.years, 6)
 
-    payload = fetch_data(symbol, market, args.years, price_years)
-    payload.update(
-        {
-            "symbol": symbol,
-            "market": market,
-            "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        }
-    )
+    try:
+        payload = fetch_data(symbol, market, args.years, price_years)
+        payload.update(
+            {
+                "symbol": symbol,
+                "market": market,
+                "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+        )
 
-    os.makedirs(args.output, exist_ok=True)
-    output_path = os.path.join(args.output, f"{symbol.replace('.', '_')}_data.json")
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2, default=str)
+        os.makedirs(args.output, exist_ok=True)
+        output_path = os.path.join(args.output, f"{symbol.replace('.', '_')}_data.json")
 
-    print(f"Saved data to {output_path}")
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, default=str)
+
+        logger.info(f"Successfully saved data to {output_path}")
+        print(f"✓ Saved data to {output_path}")
+
+    except (DataFetchError, SymbolNotFoundError, APIError) as e:
+        print(format_error_for_user(e))
+        exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        print(f"❌ Unexpected error: {e}")
+        exit(1)
 
 
 if __name__ == "__main__":

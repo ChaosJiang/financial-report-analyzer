@@ -19,6 +19,11 @@ from series_utils import (
     series_rows,
     series_to_dict,
 )
+from logging_config import get_module_logger, DataQualityLogger
+from validators import FinancialValidator
+
+logger = get_module_logger()
+data_quality_logger: Optional[DataQualityLogger] = None  # Will be initialized in main
 
 
 ROW_MAP = {
@@ -67,33 +72,99 @@ ROW_MAP = {
 
 
 def normalize_label(value: str) -> str:
+    """Normalize a label by removing non-alphanumeric characters and lowercasing."""
     return "".join(ch.lower() for ch in value if ch.isalnum())
 
 
 def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
-    lookup = {normalize_label(str(key)): str(key) for key in keys}
+    """
+    Find a matching key from candidates using multi-level matching strategy:
+    1. Exact match (case-sensitive)
+    2. Case-insensitive exact match
+    3. Fuzzy match (normalized) with logging
+
+    Args:
+        keys: Available keys to match against
+        candidates: Candidate keys to find
+
+    Returns:
+        Matched key or None
+    """
+    keys_list = list(keys)
+
+    # Step 1: Try exact match (case-sensitive)
+    for candidate in candidates:
+        if candidate in keys_list:
+            logger.debug(f"Exact match found: {candidate}")
+            return candidate
+
+    # Step 2: Try case-insensitive exact match
+    case_insensitive_lookup = {str(key).lower(): str(key) for key in keys_list}
+    for candidate in candidates:
+        candidate_lower = str(candidate).lower()
+        if candidate_lower in case_insensitive_lookup:
+            matched = case_insensitive_lookup[candidate_lower]
+            logger.debug(f"Case-insensitive match: '{candidate}' -> '{matched}'")
+            return matched
+
+    # Step 3: Try fuzzy match (normalized) with warning
+    normalized_lookup = {normalize_label(str(key)): str(key) for key in keys_list}
     for candidate in candidates:
         normalized = normalize_label(candidate)
-        if normalized in lookup:
-            return lookup[normalized]
+        if normalized in normalized_lookup:
+            matched = normalized_lookup[normalized]
+            # Log fuzzy match as warning
+            if data_quality_logger:
+                confidence = len(normalized) / max(len(candidate), len(matched))
+                data_quality_logger.log_fuzzy_match(
+                    field=candidate,
+                    matched=matched,
+                    all_keys=keys_list[:10],  # First 10 keys for context
+                    confidence=confidence
+                )
+            logger.warning(f"Fuzzy match: '{candidate}' -> '{matched}'")
+            return matched
+
+    # No match found
+    if data_quality_logger:
+        data_quality_logger.log_missing_field(
+            field=str(candidates[0]) if candidates else "unknown",
+            context=f"Available keys: {', '.join(map(str, keys_list[:5]))}"
+        )
+    logger.debug(f"No match found for candidates: {list(candidates)[:3]}")
     return None
 
 
 def find_matching_row_key(
     statement: Dict[str, Any], candidates: Iterable[str]
 ) -> Optional[str]:
-    lookup: Dict[str, str] = {}
+    """
+    Find a matching row key from statement using multi-level matching strategy.
+
+    Args:
+        statement: Statement data (dict of dicts)
+        candidates: Candidate keys to find
+
+    Returns:
+        Matched key or None
+    """
+    # Collect all keys from the statement
+    all_keys: List[str] = []
     for row_map in statement.values():
         if not isinstance(row_map, dict):
             continue
-        for key in row_map.keys():
-            normalized = normalize_label(str(key))
-            lookup.setdefault(normalized, str(key))
-    for candidate in candidates:
-        normalized = normalize_label(candidate)
-        if normalized in lookup:
-            return lookup[normalized]
-    return None
+        all_keys.extend(str(key) for key in row_map.keys())
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_keys = []
+    for key in all_keys:
+        if key not in seen:
+            seen.add(key)
+            unique_keys.append(key)
+
+    # Use the improved find_matching_key function
+    return find_matching_key(unique_keys, candidates)
 
 
 def extract_row(
@@ -289,6 +360,9 @@ def extract_price_series(price_payload: Dict[str, Dict[str, Any]]) -> pl.DataFra
 
 
 def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Build financial analysis from raw data payload."""
+    logger.info(f"Building analysis for {payload.get('symbol')}")
+
     info = payload.get("info", {}) or {}
 
     income = payload.get("financials", {}).get("income_statement", {}) or {}
@@ -307,6 +381,7 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     price_payload = payload.get("price_history", {}) or {}
 
+    logger.info("Extracting financial metrics")
     metrics = extract_metrics(income, balance, cashflow)
     quarterly_metrics = extract_quarterly_metrics(
         quarterly_income, quarterly_balance, quarterly_cashflow
@@ -351,6 +426,59 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
     assets_avg_q = compute_average_balance(total_assets_q)
     roe_ttm = compute_ttm_ratio(net_income_ttm, equity_avg_q)
     roa_ttm = compute_ttm_ratio(net_income_ttm, assets_avg_q)
+
+    # Validate financial data
+    logger.info("Running data validation")
+    validator = FinancialValidator()
+
+    # Validate latest balance sheet equation
+    latest_assets = latest_value(quarterly_metrics["total_assets"])
+    latest_liabilities = latest_value(quarterly_metrics["total_liabilities"])
+    latest_equity = latest_value(quarterly_metrics["total_equity"])
+
+    validator.validate_balance_sheet_equation(
+        assets=latest_assets,
+        liabilities=latest_liabilities,
+        equity=latest_equity,
+        tolerance=0.01  # 1% tolerance
+    )
+
+    # Validate margin consistency
+    ratios_dict = compute_ratios(metrics)
+    latest_gross_margin = None
+    latest_net_margin = None
+    if ratios_dict.get("gross_margin"):
+        latest_gross_margin = list(ratios_dict["gross_margin"].values())[-1] if ratios_dict["gross_margin"] else None
+    if ratios_dict.get("net_margin"):
+        latest_net_margin = list(ratios_dict["net_margin"].values())[-1] if ratios_dict["net_margin"] else None
+
+    validator.validate_margin_consistency(
+        gross_margin=latest_gross_margin,
+        operating_margin=None,  # Not calculated in this version
+        net_margin=latest_net_margin
+    )
+
+    # Validate quarterly data frequency
+    revenue_dates, _ = series_values(revenue_q)
+    if len(revenue_dates) >= 2:
+        validator.validate_time_series_frequency(
+            dates=revenue_dates,
+            expected_frequency="quarterly",
+            tolerance_days=10
+        )
+
+    # Get data quality summary
+    validation_summary = validator.get_summary()
+    dq_summary = data_quality_logger.get_summary() if data_quality_logger else {}
+
+    logger.info(
+        f"Validation complete: {validation_summary['passed']}/{validation_summary['total_checks']} checks passed"
+    )
+    if dq_summary:
+        logger.info(
+            f"Data quality: {dq_summary['fuzzy_matches']} fuzzy matches, "
+            f"{dq_summary['missing_fields']} missing fields"
+        )
 
     analysis = {
         "symbol": payload.get("symbol"),
@@ -398,7 +526,7 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "cash": series_to_dict(cash_q),
             "net_debt_per_share": series_to_dict(net_debt_per_share_q),
         },
-        "ratios": compute_ratios(metrics),
+        "ratios": ratios_dict,
         "ratios_ttm": {
             "roe": series_to_dict(roe_ttm),
             "roa": series_to_dict(roa_ttm),
@@ -413,6 +541,10 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "history": series_to_dict(price_series),
             "latest": latest_value(price_series),
         },
+        "data_quality": {
+            "validation": validation_summary,
+            "field_matching": dq_summary,
+        },
     }
 
     return analysis
@@ -426,16 +558,58 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    global data_quality_logger
+
+    from logging_config import setup_logging
+    import os
+
+    # Set up logging
+    _, dq_logger = setup_logging(log_level="INFO", log_to_file=True)
+    data_quality_logger = dq_logger
+
     args = parse_args()
-    with open(args.input, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
 
-    analysis = build_analysis(payload)
-    output_path = f"{args.output}/{analysis['symbol'].replace('.', '_')}_analysis.json"
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump(analysis, handle, ensure_ascii=False, indent=2)
+    try:
+        logger.info(f"Loading data from {args.input}")
+        with open(args.input, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
 
-    print(f"Saved analysis to {output_path}")
+        analysis = build_analysis(payload)
+
+        os.makedirs(args.output, exist_ok=True)
+        output_path = f"{args.output}/{analysis['symbol'].replace('.', '_')}_analysis.json"
+
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(analysis, handle, ensure_ascii=False, indent=2)
+
+        logger.info(f"Successfully saved analysis to {output_path}")
+
+        # Print summary
+        dq = analysis.get("data_quality", {})
+        validation = dq.get("validation", {})
+        field_matching = dq.get("field_matching", {})
+
+        print(f"✓ Saved analysis to {output_path}")
+
+        # Show data quality warnings if any
+        if validation.get("failed", 0) > 0:
+            print(f"\n⚠️  {validation['failed']} validation warnings detected")
+
+        if field_matching.get("fuzzy_matches", 0) > 0:
+            print(f"⚠️  {field_matching['fuzzy_matches']} fields matched using fuzzy matching")
+
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        print(f"❌ Error: {e}")
+        exit(1)
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON file: {e}")
+        print(f"❌ Error: Invalid JSON in input file")
+        exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        print(f"❌ Unexpected error: {e}")
+        exit(1)
 
 
 if __name__ == "__main__":
