@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -43,7 +43,8 @@ def build_financial_table(analysis: Dict[str, Any]) -> str:
     net_income = series_from_dict(analysis.get("financials", {}).get("net_income", {}))
     gross_margin = series_from_dict(analysis.get("ratios", {}).get("gross_margin", {}))
     net_margin = series_from_dict(analysis.get("ratios", {}).get("net_margin", {}))
-    roe = series_from_dict(analysis.get("ratios", {}).get("roe", {}))
+    roe = series_from_dict(analysis.get("ratios_ttm", {}).get("roe", {}))
+    roa = series_from_dict(analysis.get("ratios_ttm", {}).get("roa", {}))
     free_cash_flow = series_from_dict(
         analysis.get("financials", {}).get("free_cash_flow", {})
     )
@@ -61,6 +62,7 @@ def build_financial_table(analysis: Dict[str, Any]) -> str:
         ("Gross Margin", gross_margin),
         ("Net Margin", net_margin),
         ("ROE", roe),
+        ("ROA", roa),
         ("Free Cash Flow", free_cash_flow),
     ]
 
@@ -75,13 +77,26 @@ def build_financial_table(analysis: Dict[str, Any]) -> str:
             values = []
             for date in dates:
                 value = series.get(date)
-                if label.endswith("Margin") or label in {"ROE"}:
+                if label.endswith("Margin") or label in {"ROE", "ROA"}:
                     values.append(format_percent(value) if value is not None else "-")
                 else:
                     values.append(format_number(value) if value is not None else "-")
         table.append("| " + label + " | " + " | ".join(values) + " |")
 
     return "\n".join(table)
+
+
+def build_percentile_label(valuation: Dict[str, Any]) -> str:
+    window = valuation.get("window", {})
+    start = window.get("start")
+    end = window.get("end")
+    days = window.get("valuation_days")
+
+    if start and end and isinstance(days, int) and days > 0:
+        return f"{days}天({start}~{end})分位"
+    if start and end:
+        return f"{start}~{end}分位"
+    return "历史分位"
 
 
 def build_valuation_table(valuation: Dict[str, Any]) -> str:
@@ -92,11 +107,11 @@ def build_valuation_table(valuation: Dict[str, Any]) -> str:
         ("P/E", metrics.get("pe"), percentiles.get("pe")),
         ("P/S", metrics.get("ps"), percentiles.get("ps")),
         ("P/B", metrics.get("pb"), percentiles.get("pb")),
-        ("PEG", metrics.get("peg"), None),
-        ("EV/EBITDA", metrics.get("ev_to_ebitda"), None),
+        ("EV/EBITDA", metrics.get("ev_to_ebitda"), percentiles.get("ev_to_ebitda")),
     ]
 
-    table = ["| 指标 | 当前值 | 5年分位 |", "| --- | --- | --- |"]
+    percentile_label = build_percentile_label(valuation)
+    table = [f"| 指标 | 当前值 | {percentile_label} |", "| --- | --- | --- |"]
     for label, value, pct in rows:
         table.append(
             "| "
@@ -108,6 +123,25 @@ def build_valuation_table(valuation: Dict[str, Any]) -> str:
             + " |"
         )
     return "\n".join(table)
+
+
+def build_currency_note(valuation: Dict[str, Any]) -> str:
+    currency = valuation.get("currency", {})
+    market = currency.get("market")
+    financial = currency.get("financial")
+    fx_rate = currency.get("fx_rate")
+    converted = currency.get("converted")
+
+    if not market or not financial:
+        return ""
+    if market == financial:
+        return f"- 估值币种: {market}"
+    if fx_rate is None or not converted:
+        return (
+            f"- 估值币种: {market} (财报币种: {financial})\n"
+            "- ⚠️ 未能获取汇率，历史估值分位与 DCF 可能不准确"
+        )
+    return f"- 估值币种: {market} (财报币种: {financial}, 汇率: {fx_rate:.4f})"
 
 
 def build_analyst_section(analyst: Dict[str, Any]) -> str:
@@ -135,7 +169,7 @@ def build_report(
     company = analysis.get("company", {})
     symbol = analysis.get("symbol")
 
-    report_lines = [
+    report_lines: list[str] = [
         f"# 财报分析报告 - {company.get('name') or symbol}",
         "",
         f"生成时间: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
@@ -144,6 +178,8 @@ def build_report(
         f"- 公司名称: {company.get('name') or '-'}",
         f"- 行业: {company.get('industry') or '-'}",
         f"- 领域: {company.get('sector') or '-'}",
+        f"- 当前股价: {format_number(valuation.get('current', {}).get('price'))} {company.get('currency', '')}",
+        f"- 总市值: {format_number(valuation.get('current', {}).get('market_cap'))}",
         "",
         "## 二、业务模式分析",
         "- （此部分由 AI 根据财报与公开信息生成）",
@@ -156,6 +192,7 @@ def build_report(
         "",
         "## 五、估值分析",
         build_valuation_table(valuation),
+        build_currency_note(valuation),
         "",
         "## 六、分析师预期",
         build_analyst_section(analyst),

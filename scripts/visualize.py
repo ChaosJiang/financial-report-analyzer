@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Dict, Optional
+from typing import Dict
 
 import matplotlib.pyplot as plt
 import pandas as pd

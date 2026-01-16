@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import yfinance as yf
 import akshare as ak
 
@@ -58,12 +58,40 @@ def get_balance_sheet(ticker: yf.Ticker) -> pd.DataFrame:
 def get_cashflow(ticker: yf.Ticker) -> pd.DataFrame:
     if hasattr(ticker, "cashflow"):
         return ticker.cashflow
+    if hasattr(ticker, "cash_flow"):
+        return ticker.cash_flow
     return pd.DataFrame()
 
 
-def fetch_yfinance(symbol: str, years: int) -> Dict[str, Any]:
+def get_quarterly_income_statement(ticker: yf.Ticker) -> pd.DataFrame:
+    if hasattr(ticker, "quarterly_income_stmt"):
+        return ticker.quarterly_income_stmt
+    if hasattr(ticker, "quarterly_incomestmt"):
+        return ticker.quarterly_incomestmt
+    if hasattr(ticker, "quarterly_financials"):
+        return ticker.quarterly_financials
+    return pd.DataFrame()
+
+
+def get_quarterly_balance_sheet(ticker: yf.Ticker) -> pd.DataFrame:
+    if hasattr(ticker, "quarterly_balance_sheet"):
+        return ticker.quarterly_balance_sheet
+    if hasattr(ticker, "quarterly_balancesheet"):
+        return ticker.quarterly_balancesheet
+    return pd.DataFrame()
+
+
+def get_quarterly_cashflow(ticker: yf.Ticker) -> pd.DataFrame:
+    if hasattr(ticker, "quarterly_cash_flow"):
+        return ticker.quarterly_cash_flow
+    if hasattr(ticker, "quarterly_cashflow"):
+        return ticker.quarterly_cashflow
+    return pd.DataFrame()
+
+
+def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
     ticker = yf.Ticker(symbol)
-    history = ticker.history(period=f"{years}y", auto_adjust=False)
+    history = ticker.history(period=f"{price_years}y", auto_adjust=False)
     recommendations = getattr(ticker, "recommendations", None)
     recommendations_summary = getattr(ticker, "recommendations_summary", None)
     analyst_price_target = getattr(ticker, "analyst_price_target", None)
@@ -74,6 +102,11 @@ def fetch_yfinance(symbol: str, years: int) -> Dict[str, Any]:
             "income_statement": df_to_dict(get_income_statement(ticker)),
             "balance_sheet": df_to_dict(get_balance_sheet(ticker)),
             "cashflow": df_to_dict(get_cashflow(ticker)),
+        },
+        "financials_quarterly": {
+            "income_statement": df_to_dict(get_quarterly_income_statement(ticker)),
+            "balance_sheet": df_to_dict(get_quarterly_balance_sheet(ticker)),
+            "cashflow": df_to_dict(get_quarterly_cashflow(ticker)),
         },
         "price_history": df_to_dict(history),
         "analyst": {
@@ -114,9 +147,11 @@ def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
     }
 
 
-def fetch_data(symbol: str, market: str, years: int) -> Dict[str, Any]:
+def fetch_data(
+    symbol: str, market: str, years: int, price_years: int
+) -> Dict[str, Any]:
     if market in {"US", "HK", "JP"}:
-        return fetch_yfinance(symbol, years)
+        return fetch_yfinance(symbol, years, price_years)
     if market == "CN":
         return fetch_cn(symbol, years)
     raise ValueError(f"Unsupported market: {market}")
@@ -126,7 +161,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch financial data for analysis")
     parser.add_argument("--symbol", required=True, help="Stock symbol")
     parser.add_argument("--market", required=True, choices=["US", "CN", "HK", "JP"])
-    parser.add_argument("--years", type=int, default=5)
+    parser.add_argument("--years", type=int, default=1)
+    parser.add_argument(
+        "--price-years",
+        type=int,
+        default=None,
+        help="Years of price history to fetch (defaults to max(--years, 6) for yfinance markets)",
+    )
     parser.add_argument("--output", default="./output")
     return parser.parse_args()
 
@@ -136,7 +177,11 @@ def main() -> None:
     symbol = normalize_symbol(args.symbol)
     market = args.market.upper()
 
-    payload = fetch_data(symbol, market, args.years)
+    price_years = args.price_years
+    if price_years is None:
+        price_years = max(args.years, 6)
+
+    payload = fetch_data(symbol, market, args.years, price_years)
     payload.update(
         {
             "symbol": symbol,

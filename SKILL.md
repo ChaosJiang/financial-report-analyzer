@@ -9,7 +9,7 @@ metadata:
 ---
 
 ## 我能做什么
-- 自动获取 3-5 年财报与行情数据
+- 默认获取 1 年财报与行情数据，可按需调整
 - 总结业务模式与竞争格局
 - 生成关键财务指标对比 (YoY/QoQ/CAGR)
 - 深度估值分析 (P/E 分位数、PEG、同行对比、DCF 参考)
@@ -30,8 +30,19 @@ metadata:
 ## 执行步骤
 
 ### 0) 环境准备 (首次运行)
+
+**自动检测项目根目录（推荐）：**
 ```bash
-export SKILL_ROOT="${SKILL_ROOT:-/Users/zhichaojiang/Document/GitHub/financial-report-analyzer}"
+# 从 SKILL.md 所在目录自动检测
+export SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 -m venv "$SKILL_ROOT/.venv"
+. "$SKILL_ROOT/.venv/bin/activate"
+python -m pip install -r "$SKILL_ROOT/scripts/requirements.txt"
+```
+
+**或使用环境变量（适用于自定义路径）：**
+```bash
+# 如果已设置 SKILL_ROOT 环境变量，直接使用
 python3 -m venv "$SKILL_ROOT/.venv"
 . "$SKILL_ROOT/.venv/bin/activate"
 python -m pip install -r "$SKILL_ROOT/scripts/requirements.txt"
@@ -40,21 +51,31 @@ python -m pip install -r "$SKILL_ROOT/scripts/requirements.txt"
 > 已安装依赖可跳过本步。
 
 ### 1) 运行前准备 (每次执行)
+
+**自动检测模式：**
 ```bash
-export SKILL_ROOT="${SKILL_ROOT:-/Users/zhichaojiang/Document/GitHub/financial-report-analyzer}"
+export SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SKILL_ROOT/.venv/bin/activate"
+```
+
+**或使用环境变量模式：**
+```bash
 . "$SKILL_ROOT/.venv/bin/activate"
 ```
 
 ### 2) 数据获取
 ```bash
+YEARS=${YEARS:-1}
 python "$SKILL_ROOT/scripts/fetch_data.py" \
   --symbol AAPL \
   --market US \
-  --years 5 \
+  --years "$YEARS" \
   --output "$SKILL_ROOT/output"
 ```
 
 输出: `output/AAPL_data.json`
+
+提示: 若用户指定年份（如“近 3 年”），设置 `YEARS=3`；未指定则使用默认 1 年。
 
 ### 3) 财务分析
 ```bash
