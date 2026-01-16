@@ -5,12 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
-import math
 
 from series_utils import parse_datetime
-
 
 BUY_KEYWORDS = {"buy", "strong buy", "overweight", "outperform", "add"}
 HOLD_KEYWORDS = {"hold", "neutral", "market perform", "equal-weight"}
