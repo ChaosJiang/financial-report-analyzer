@@ -4,6 +4,7 @@
 import argparse
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,6 +35,26 @@ def format_percent(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value * 100:.2f}%"
     return str(value)
+
+
+def format_currency(value: Any, currency: str | None) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, (int, float)):
+        if currency:
+            return f"{value:,.2f} {currency}"
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    return text
 
 
 def build_financial_table(analysis: dict[str, Any]) -> str:
@@ -163,6 +184,157 @@ def build_analyst_section(analyst: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_value_change(current: float | None, previous: float | None) -> str:
+    if current is None or previous is None or previous == 0:
+        return "-"
+    change = (current / previous - 1) * 100
+    return f"{change:.2f}%"
+
+
+def latest_series_value(series_map: dict[str, Any]) -> float | None:
+    if not series_map:
+        return None
+    for _, value in reversed(list(series_map.items())):
+        try:
+            if value is None:
+                continue
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def summarize_growth(analysis: dict[str, Any]) -> list[str]:
+    growth = analysis.get("growth", {})
+    revenue_cagr = growth.get("revenue_cagr")
+    net_income_cagr = growth.get("net_income_cagr")
+    lines = []
+    if isinstance(revenue_cagr, (int, float)):
+        lines.append(f"- 收入 CAGR: {revenue_cagr * 100:.2f}%")
+    if isinstance(net_income_cagr, (int, float)):
+        lines.append(f"- 净利润 CAGR: {net_income_cagr * 100:.2f}%")
+    return lines
+
+
+def summarize_profitability(analysis: dict[str, Any]) -> list[str]:
+    ratios = analysis.get("ratios", {})
+    gross_margin = latest_series_value(ratios.get("gross_margin", {}))
+    net_margin = latest_series_value(ratios.get("net_margin", {}))
+    lines = []
+    if gross_margin is not None:
+        lines.append(f"- 最新毛利率: {gross_margin * 100:.2f}%")
+    if net_margin is not None:
+        lines.append(f"- 最新净利率: {net_margin * 100:.2f}%")
+    return lines
+
+
+def summarize_cashflow(analysis: dict[str, Any]) -> list[str]:
+    financials_ttm = analysis.get("financials_ttm", {})
+    fcf = latest_series_value(financials_ttm.get("free_cash_flow", {}))
+    if fcf is None:
+        return []
+    return [f"- 最新自由现金流(TTM): {format_number(fcf)}"]
+
+
+def summarize_balance_sheet(analysis: dict[str, Any]) -> list[str]:
+    ratios = analysis.get("ratios", {})
+    debt_ratio = latest_series_value(ratios.get("debt_to_equity", {}))
+    lines = []
+    if debt_ratio is not None:
+        lines.append(f"- 负债权益比: {debt_ratio:.2f}")
+    return lines
+
+
+def build_business_model_section(analysis: dict[str, Any]) -> str:
+    company = analysis.get("company", {})
+    summary = clean_text(company.get("summary"))
+    lines = []
+    if summary:
+        lines.append(f"- 业务概述: {summary}")
+    if company.get("industry"):
+        lines.append(f"- 行业定位: {company.get('industry')}")
+    if company.get("sector"):
+        lines.append(f"- 领域定位: {company.get('sector')}")
+
+    metrics_lines = []
+    metrics_lines.extend(summarize_growth(analysis))
+    metrics_lines.extend(summarize_profitability(analysis))
+    metrics_lines.extend(summarize_cashflow(analysis))
+
+    if metrics_lines:
+        lines.append("- 经营特征:")
+        lines.extend(metrics_lines)
+
+    if not lines:
+        return "- 暂无业务模式解读，建议补充官方年报或公司介绍。"
+    return "\n".join(lines)
+
+
+def build_competitive_section(analysis: dict[str, Any]) -> str:
+    company = analysis.get("company", {})
+    lines = []
+    if company.get("industry"):
+        lines.append(f"- 行业类型: {company.get('industry')}")
+    if company.get("sector"):
+        lines.append(f"- 产业板块: {company.get('sector')}")
+
+    lines.extend(summarize_profitability(analysis))
+    lines.extend(summarize_balance_sheet(analysis))
+
+    if not lines:
+        return "- 暂无竞争格局解读，建议补充同行与行业数据。"
+    return "\n".join(lines)
+
+
+def build_investment_section(
+    analysis: dict[str, Any], valuation: dict[str, Any], analyst: dict[str, Any]
+) -> str:
+    lines = []
+    metrics = valuation.get("metrics", {})
+    percentiles = valuation.get("percentiles", {})
+    current_price = valuation.get("current", {}).get("price")
+    dcf_value = valuation.get("dcf", {}).get("per_share")
+    target_mean = analyst.get("price_targets", {}).get("mean")
+
+    if current_price is not None and dcf_value is not None:
+        diff = format_value_change(dcf_value, current_price)
+        lines.append(f"- DCF 估值对比: {format_number(dcf_value)} (较现价 {diff})")
+
+    if current_price is not None and target_mean is not None:
+        diff = format_value_change(target_mean, current_price)
+        lines.append(
+            f"- 分析师目标价均值: {format_number(target_mean)} (较现价 {diff})"
+        )
+
+    if metrics:
+        pe = metrics.get("pe")
+        ps = metrics.get("ps")
+        pb = metrics.get("pb")
+        lines.append(
+            "- 估值指标: "
+            + ", ".join(
+                [
+                    f"P/E {format_number(pe)} ({format_number(percentiles.get('pe'))}%)",
+                    f"P/S {format_number(ps)} ({format_number(percentiles.get('ps'))}%)",
+                    f"P/B {format_number(pb)} ({format_number(percentiles.get('pb'))}%)",
+                ]
+            )
+        )
+
+    fundamentals = []
+    fundamentals.extend(summarize_growth(analysis))
+    fundamentals.extend(summarize_profitability(analysis))
+    fundamentals.extend(summarize_balance_sheet(analysis))
+    if fundamentals:
+        lines.append("- 基本面提示:")
+        lines.extend(fundamentals)
+
+    if not lines:
+        return "- 暂无投资建议输出，建议补充财务与估值数据后再生成。"
+    lines.append("- 本建议仅供参考，请结合风险偏好与最新公告。")
+    return "\n".join(lines)
+
+
 def build_data_quality_section(analysis: dict[str, Any]) -> str:
     """Build data quality appendix section."""
     dq = analysis.get("data_quality", {})
@@ -245,6 +417,7 @@ def build_report(
     company = analysis.get("company", {})
     symbol = analysis.get("symbol")
     data_fetched_at = analysis.get("data_fetched_at")
+    currency = company.get("currency")
 
     report_lines: list[str] = [
         f"# 财报分析报告 - {company.get('name') or symbol}",
@@ -256,14 +429,16 @@ def build_report(
         f"- 公司名称: {company.get('name') or '-'}",
         f"- 行业: {company.get('industry') or '-'}",
         f"- 领域: {company.get('sector') or '-'}",
-        f"- 当前股价: {format_number(valuation.get('current', {}).get('price'))} {company.get('currency', '')}",
-        f"- 总市值: {format_number(valuation.get('current', {}).get('market_cap'))}",
+        f"- 国家/地区: {company.get('country') or '-'}",
+        f"- 官网: {company.get('website') or '-'}",
+        f"- 当前股价: {format_currency(valuation.get('current', {}).get('price'), currency)}",
+        f"- 总市值: {format_currency(valuation.get('current', {}).get('market_cap'), currency)}",
         "",
         "## 二、业务模式分析",
-        "- （此部分由 AI 根据财报与公开信息生成）",
+        build_business_model_section(analysis),
         "",
         "## 三、竞争格局",
-        "- （此部分由 AI 根据行业信息生成）",
+        build_competitive_section(analysis),
         "",
         "## 四、财务分析",
         build_financial_table(analysis),
@@ -283,7 +458,7 @@ def build_report(
         "- price_history.png",
         "",
         "## 八、投资建议",
-        "- （基于基本面优先的综合建议，由 AI 生成）",
+        build_investment_section(analysis, valuation, analyst),
         "",
     ]
 
