@@ -8,13 +8,9 @@ Provides validators for:
 - Data range validation
 """
 
-from __future__ import annotations
-
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
 
 from logging_config import get_module_logger
-from exceptions import DataValidationError, BalanceSheetValidationError
 
 logger = get_module_logger()
 
@@ -59,13 +55,13 @@ class FinancialValidator:
             config: Configuration dict with tolerance settings
         """
         self.config = config or {}
-        self.results: List[ValidationResult] = []
+        self.results: list[ValidationResult] = []
 
     def validate_balance_sheet_equation(
         self,
-        assets: Optional[float],
-        liabilities: Optional[float],
-        equity: Optional[float],
+        assets: float | None,
+        liabilities: float | None,
+        equity: float | None,
         tolerance: float = 0.01,
     ) -> ValidationResult:
         """
@@ -151,9 +147,9 @@ class FinancialValidator:
 
     def validate_margin_consistency(
         self,
-        gross_margin: Optional[float],
-        operating_margin: Optional[float],
-        net_margin: Optional[float],
+        gross_margin: float | None,
+        operating_margin: float | None,
+        net_margin: float | None,
     ) -> ValidationResult:
         """
         Validate: Gross Margin >= Operating Margin >= Net Margin.
@@ -233,7 +229,7 @@ class FinancialValidator:
 
     def validate_time_series_frequency(
         self,
-        dates: List[datetime],
+        dates: list[datetime],
         expected_frequency: str = "quarterly",
         tolerance_days: int = 10,
     ) -> ValidationResult:
@@ -336,9 +332,9 @@ class FinancialValidator:
 
     def validate_data_range(
         self,
-        value: Optional[float],
-        min_value: Optional[float] = None,
-        max_value: Optional[float] = None,
+        value: float | None,
+        min_value: float | None = None,
+        max_value: float | None = None,
         field_name: str = "value",
     ) -> ValidationResult:
         """
@@ -382,7 +378,7 @@ class FinancialValidator:
         else:
             result = ValidationResult(
                 passed=False,
-                message=f"Range validation failed: " + "; ".join(issues),
+                message="Range validation failed: " + "; ".join(issues),
                 severity="warning",
                 details={"value": value, "min": min_value, "max": max_value},
             )

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Analyze analyst expectations from fetched data."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import math
@@ -121,7 +119,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    with open(args.input, "r", encoding="utf-8") as handle:
+    with open(args.input, encoding="utf-8") as handle:
         data = json.load(handle)
 
     analyst_report = build_analyst_report(data)

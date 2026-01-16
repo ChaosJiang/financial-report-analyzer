@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Run the full report pipeline with caching and market inference."""
 
-from __future__ import annotations
-
 import argparse
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any
 
 import analyst as analyst_module
 import analyze as analyze_module
@@ -15,10 +14,9 @@ import fetch_data as fetch_data_module
 import report as report_module
 import valuation as valuation_module
 import visualize as visualize_module
-
+from exceptions import FinancialReportError, format_error_for_user
 from logging_config import get_module_logger, setup_logging
-from progress import progress, step_progress
-from exceptions import format_error_for_user, FinancialReportError
+from progress import step_progress
 
 logger = get_module_logger()
 
@@ -32,7 +30,7 @@ CHART_FILES = [
 ]
 
 
-def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+def parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
@@ -49,12 +47,12 @@ def hours_since(timestamp: datetime) -> float:
     return (datetime.now(timezone.utc) - timestamp).total_seconds() / 3600
 
 
-def read_json(path: Path) -> Dict[str, Any]:
+def read_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def write_json(path: Path, payload: Dict[str, Any]) -> None:
+def write_json(path: Path, payload: dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2, default=str)
 
@@ -151,13 +149,13 @@ def main() -> None:
 
         # Dry-run mode: preview operations
         if args.dry_run:
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"DRY RUN MODE - Preview of operations for {symbol}")
-            print(f"{'='*60}\n")
+            print(f"{'=' * 60}\n")
             print(f"Symbol: {symbol}")
             print(f"Market: {market}")
             print(f"Output directory: {output_dir}")
-            print(f"\nOperations that would be performed:")
+            print("\nOperations that would be performed:")
 
             if not args.refresh and is_fresh(data_path, args.max_age_hours):
                 data_payload = read_json(data_path)
@@ -171,22 +169,22 @@ def main() -> None:
             else:
                 print(f"  • Fetch data from {market} market for {symbol}")
 
-            print(f"  • Analyze financial data")
+            print("  • Analyze financial data")
 
             if not args.skip_valuation:
-                print(f"  • Compute valuation metrics")
+                print("  • Compute valuation metrics")
 
             if not args.skip_analyst:
-                print(f"  • Extract analyst recommendations")
+                print("  • Extract analyst recommendations")
 
             if not args.skip_charts:
                 print(f"  • Generate {len(CHART_FILES)} charts")
 
             if not args.skip_report:
-                print(f"  • Generate markdown report")
+                print("  • Generate markdown report")
 
-            print(f"\nNo files will be modified in dry-run mode.")
-            print(f"Run without --dry-run to execute these operations.\n")
+            print("\nNo files will be modified in dry-run mode.")
+            print("Run without --dry-run to execute these operations.\n")
             return
 
         # Calculate total steps for progress tracking
@@ -216,7 +214,9 @@ def main() -> None:
                     fetched_at = parse_iso_datetime(data_payload.get("fetched_at"))
                     if fetched_at:
                         age_hours = hours_since(fetched_at)
-                        print(f"    Using cache (fetched {age_hours:.1f} hours ago): {data_path}")
+                        print(
+                            f"    Using cache (fetched {age_hours:.1f} hours ago): {data_path}"
+                        )
                     else:
                         print(f"    Using cached data: {data_path}")
             else:
@@ -251,7 +251,7 @@ def main() -> None:
             analysis_mtime = analysis_path.stat().st_mtime
 
             # Step 3: Compute valuation
-            valuation_payload: Dict[str, Any] = {}
+            valuation_payload: dict[str, Any] = {}
             if not args.skip_valuation:
                 with sp.step("Computing valuation metrics"):
                     if needs_update(valuation_path, [data_mtime, analysis_mtime]):
@@ -265,11 +265,13 @@ def main() -> None:
                         print(f"    Using cache: {valuation_path}")
 
             # Step 4: Extract analyst data
-            analyst_payload: Dict[str, Any] = {}
+            analyst_payload: dict[str, Any] = {}
             if not args.skip_analyst:
                 with sp.step("Extracting analyst recommendations"):
                     if needs_update(analyst_path, [data_mtime]):
-                        analyst_payload = analyst_module.build_analyst_report(data_payload)
+                        analyst_payload = analyst_module.build_analyst_report(
+                            data_payload
+                        )
                         write_json(analyst_path, analyst_payload)
                         print(f"    Saved to: {analyst_path}")
                     else:
@@ -278,9 +280,11 @@ def main() -> None:
 
             # Step 5: Generate charts
             if not args.skip_charts:
-                with sp.step(f"Generating charts"):
+                with sp.step("Generating charts"):
                     if charts_need_update(charts_dir, analysis_mtime):
-                        visualize_module.generate_charts(analysis_payload, str(charts_dir))
+                        visualize_module.generate_charts(
+                            analysis_payload, str(charts_dir)
+                        )
                         print(f"    Saved to: {charts_dir}")
                     else:
                         print(f"    Using cache: {charts_dir}")
@@ -303,9 +307,9 @@ def main() -> None:
                         print(f"    Using cache: {report_path}")
 
         # Print summary
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Report generation complete for {symbol}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         company_name = analysis_payload.get("company", {}).get("name", symbol)
         print(f"Company: {company_name}")
         industry = analysis_payload.get("company", {}).get("industry")
@@ -322,15 +326,20 @@ def main() -> None:
         validation = dq.get("validation", {})
         field_matching = dq.get("field_matching", {})
 
-        if validation.get("failed", 0) > 0 or field_matching.get("fuzzy_matches", 0) > 0:
-            print(f"\n⚠️  Data Quality Warnings:")
+        if (
+            validation.get("failed", 0) > 0
+            or field_matching.get("fuzzy_matches", 0) > 0
+        ):
+            print("\n⚠️  Data Quality Warnings:")
             if validation.get("failed", 0) > 0:
                 print(f"  • {validation['failed']} validation checks failed")
             if field_matching.get("fuzzy_matches", 0) > 0:
-                print(f"  • {field_matching['fuzzy_matches']} fields matched using fuzzy matching")
+                print(
+                    f"  • {field_matching['fuzzy_matches']} fields matched using fuzzy matching"
+                )
 
         print(f"\nReport saved to: {report_path}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
     except FinancialReportError as e:
         print(format_error_for_user(e))
@@ -341,7 +350,7 @@ def main() -> None:
     except Exception as e:
         logger.error(f"Unexpected error in report pipeline: {e}", exc_info=True)
         print(f"❌ Unexpected error: {e}")
-        print(f"\nCheck logs for more details.")
+        print("\nCheck logs for more details.")
         exit(1)
 
 

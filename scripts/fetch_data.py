@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
 """Fetch multi-market financial reports and price data."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any
 
+import akshare as ak
 import numpy as np
 import yfinance as yf
-import akshare as ak
-
+from exceptions import APIError, DataFetchError, SymbolNotFoundError
 from logging_config import get_module_logger
-from exceptions import (
-    DataFetchError,
-    APIError,
-    SymbolNotFoundError,
-)
 
 logger = get_module_logger()
 
@@ -38,7 +31,7 @@ def infer_market(symbol: str) -> str:
     return "US"
 
 
-def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
+def df_to_dict(df: Any | None) -> dict[str, dict[str, Any]]:
     """Convert DataFrame to dict, handling various edge cases."""
     if df is None or getattr(df, "empty", False):
         return {}
@@ -74,7 +67,7 @@ def df_to_dict(df: Any | None) -> Dict[str, Dict[str, Any]]:
     return {}
 
 
-def get_ticker_info(ticker: yf.Ticker) -> Dict[str, Any]:
+def get_ticker_info(ticker: yf.Ticker) -> dict[str, Any]:
     """Get ticker info, trying multiple access methods."""
     # Try get_info() first (newer API)
     try:
@@ -146,7 +139,7 @@ def get_quarterly_cashflow(ticker: yf.Ticker) -> Any:
     return {}
 
 
-def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
+def fetch_yfinance(symbol: str, years: int, price_years: int) -> dict[str, Any]:
     """Fetch data from Yahoo Finance."""
     logger.info(f"Fetching yfinance data for {symbol}")
 
@@ -175,7 +168,7 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
             logger.warning(f"No price history found for {symbol}")
     except Exception as e:
         logger.error(f"Failed to fetch price history for {symbol}: {e}")
-        raise DataFetchError(f"Failed to fetch price history") from e
+        raise DataFetchError("Failed to fetch price history") from e
 
     # Get analyst data (optional, don't fail if missing)
     recommendations = getattr(ticker, "recommendations", None)
@@ -203,7 +196,7 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> Dict[str, Any]:
     }
 
 
-def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
+def fetch_cn(symbol: str, years: int) -> dict[str, Any]:
     """Fetch data for Chinese A-share stocks."""
     code = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
     logger.info(f"Fetching CN market data for {code}")
@@ -258,7 +251,7 @@ def fetch_cn(symbol: str, years: int) -> Dict[str, Any]:
 
 def fetch_data(
     symbol: str, market: str, years: int, price_years: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if market in {"US", "HK", "JP"}:
         return fetch_yfinance(symbol, years, price_years)
     if market == "CN":
@@ -282,8 +275,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    from logging_config import setup_logging
     from exceptions import format_error_for_user
+    from logging_config import setup_logging
 
     # Set up logging
     _, _ = setup_logging(log_level="INFO", log_to_file=True)
@@ -304,7 +297,9 @@ def main() -> None:
             {
                 "symbol": symbol,
                 "market": market,
-                "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "fetched_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
             }
         )
 

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Generate normalized financial analysis from fetched data."""
 
-from __future__ import annotations
-
 import argparse
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Optional, Tuple, List
+from typing import Any
 
 import polars as pl
-
+from logging_config import DataQualityLogger, get_module_logger
 from series_utils import (
     empty_series,
     latest_value,
@@ -19,11 +18,10 @@ from series_utils import (
     series_rows,
     series_to_dict,
 )
-from logging_config import get_module_logger, DataQualityLogger
 from validators import FinancialValidator
 
 logger = get_module_logger()
-data_quality_logger: Optional[DataQualityLogger] = None  # Will be initialized in main
+data_quality_logger: DataQualityLogger | None = None  # Will be initialized in main
 
 
 ROW_MAP = {
@@ -76,7 +74,7 @@ def normalize_label(value: str) -> str:
     return "".join(ch.lower() for ch in value if ch.isalnum())
 
 
-def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optional[str]:
+def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> str | None:
     """
     Find a matching key from candidates using multi-level matching strategy:
     1. Exact match (case-sensitive)
@@ -120,7 +118,7 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optiona
                     field=candidate,
                     matched=matched,
                     all_keys=keys_list[:10],  # First 10 keys for context
-                    confidence=confidence
+                    confidence=confidence,
                 )
             logger.warning(f"Fuzzy match: '{candidate}' -> '{matched}'")
             return matched
@@ -129,15 +127,15 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> Optiona
     if data_quality_logger:
         data_quality_logger.log_missing_field(
             field=str(candidates[0]) if candidates else "unknown",
-            context=f"Available keys: {', '.join(map(str, keys_list[:5]))}"
+            context=f"Available keys: {', '.join(map(str, keys_list[:5]))}",
         )
     logger.debug(f"No match found for candidates: {list(candidates)[:3]}")
     return None
 
 
 def find_matching_row_key(
-    statement: Dict[str, Any], candidates: Iterable[str]
-) -> Optional[str]:
+    statement: dict[str, Any], candidates: Iterable[str]
+) -> str | None:
     """
     Find a matching row key from statement using multi-level matching strategy.
 
@@ -149,7 +147,7 @@ def find_matching_row_key(
         Matched key or None
     """
     # Collect all keys from the statement
-    all_keys: List[str] = []
+    all_keys: list[str] = []
     for row_map in statement.values():
         if not isinstance(row_map, dict):
             continue
@@ -168,13 +166,13 @@ def find_matching_row_key(
 
 
 def extract_row(
-    statement: Dict[str, Dict[str, Any]], candidates: Iterable[str]
+    statement: dict[str, dict[str, Any]], candidates: Iterable[str]
 ) -> pl.DataFrame:
     if not statement:
         return empty_series()
     if "报告日期" in statement:
         metric_key = find_matching_key(
-            [key for key in statement.keys() if key != "报告日期"], candidates
+            [key for key in statement if key != "报告日期"], candidates
         )
         if not metric_key:
             return empty_series()
@@ -191,18 +189,18 @@ def extract_row(
     return series_from_mapping(mapping)
 
 
-def series_values(series: pl.DataFrame) -> Tuple[List[datetime], List[float]]:
+def series_values(series: pl.DataFrame) -> tuple[list[datetime], list[float]]:
     rows = series_rows(series)
     dates = [row[0] for row in rows]
     values = [row[1] for row in rows]
     return dates, values
 
 
-def compute_yoy(series: pl.DataFrame) -> Dict[str, Any]:
+def compute_yoy(series: pl.DataFrame) -> dict[str, Any]:
     dates, values = series_values(series)
     if len(values) < 2:
         return {}
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for idx in range(1, len(values)):
         previous = values[idx - 1]
         if previous == 0:
@@ -211,7 +209,7 @@ def compute_yoy(series: pl.DataFrame) -> Dict[str, Any]:
     return result
 
 
-def compute_cagr(series: pl.DataFrame) -> Optional[float]:
+def compute_cagr(series: pl.DataFrame) -> float | None:
     dates, values = series_values(series)
     if len(values) < 2:
         return None
@@ -254,7 +252,9 @@ def divide_series(numerator: pl.DataFrame, denominator: pl.DataFrame) -> pl.Data
     return result.select(["date", "value"]).filter(pl.col("value").is_finite())
 
 
-def compute_per_share(numerator: pl.DataFrame, denominator: pl.DataFrame) -> pl.DataFrame:
+def compute_per_share(
+    numerator: pl.DataFrame, denominator: pl.DataFrame
+) -> pl.DataFrame:
     return divide_series(numerator, denominator)
 
 
@@ -275,10 +275,10 @@ def compute_ttm_ratio(
 
 
 def extract_quarterly_metrics(
-    income: Dict[str, Dict[str, Any]],
-    balance: Dict[str, Dict[str, Any]],
-    cashflow: Dict[str, Dict[str, Any]],
-) -> Dict[str, pl.DataFrame]:
+    income: dict[str, dict[str, Any]],
+    balance: dict[str, dict[str, Any]],
+    cashflow: dict[str, dict[str, Any]],
+) -> dict[str, pl.DataFrame]:
     return {
         "revenue": extract_row(income, ROW_MAP["revenue"]),
         "net_income": extract_row(income, ROW_MAP["net_income"]),
@@ -299,10 +299,10 @@ def extract_quarterly_metrics(
 
 
 def extract_metrics(
-    income: Dict[str, Dict[str, Any]],
-    balance: Dict[str, Dict[str, Any]],
-    cashflow: Dict[str, Dict[str, Any]],
-) -> Dict[str, pl.DataFrame]:
+    income: dict[str, dict[str, Any]],
+    balance: dict[str, dict[str, Any]],
+    cashflow: dict[str, dict[str, Any]],
+) -> dict[str, pl.DataFrame]:
     return {
         "revenue": extract_row(income, ROW_MAP["revenue"]),
         "net_income": extract_row(income, ROW_MAP["net_income"]),
@@ -317,8 +317,8 @@ def extract_metrics(
 
 
 def compute_ratios(
-    metrics: Dict[str, pl.DataFrame],
-) -> Dict[str, Dict[str, Any]]:
+    metrics: dict[str, pl.DataFrame],
+) -> dict[str, dict[str, Any]]:
     revenue = metrics["revenue"]
     net_income = metrics["net_income"]
     gross_profit = metrics["gross_profit"]
@@ -331,12 +331,14 @@ def compute_ratios(
         "net_margin": series_to_dict(divide_series(net_income, revenue)),
         "roe": series_to_dict(divide_series(net_income, total_equity)),
         "roa": series_to_dict(divide_series(net_income, total_assets)),
-        "debt_to_equity": series_to_dict(divide_series(total_liabilities, total_equity)),
+        "debt_to_equity": series_to_dict(
+            divide_series(total_liabilities, total_equity)
+        ),
     }
     return ratios
 
 
-def extract_price_series(price_payload: Dict[str, Dict[str, Any]]) -> pl.DataFrame:
+def extract_price_series(price_payload: dict[str, dict[str, Any]]) -> pl.DataFrame:
     if not price_payload:
         return empty_series()
     date_key = next(
@@ -345,7 +347,7 @@ def extract_price_series(price_payload: Dict[str, Dict[str, Any]]) -> pl.DataFra
     candidates = ["Close", "Adj Close", "收盘", "close", "close_price"]
     if date_key:
         value_key = find_matching_key(
-            [key for key in price_payload.keys() if key != date_key], candidates
+            [key for key in price_payload if key != date_key], candidates
         )
         if not value_key:
             return empty_series()
@@ -359,7 +361,7 @@ def extract_price_series(price_payload: Dict[str, Dict[str, Any]]) -> pl.DataFra
     return empty_series()
 
 
-def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
+def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     """Build financial analysis from raw data payload."""
     logger.info(f"Building analysis for {payload.get('symbol')}")
 
@@ -440,7 +442,7 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
         assets=latest_assets,
         liabilities=latest_liabilities,
         equity=latest_equity,
-        tolerance=0.01  # 1% tolerance
+        tolerance=0.01,  # 1% tolerance
     )
 
     # Validate margin consistency
@@ -448,23 +450,29 @@ def build_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
     latest_gross_margin = None
     latest_net_margin = None
     if ratios_dict.get("gross_margin"):
-        latest_gross_margin = list(ratios_dict["gross_margin"].values())[-1] if ratios_dict["gross_margin"] else None
+        latest_gross_margin = (
+            list(ratios_dict["gross_margin"].values())[-1]
+            if ratios_dict["gross_margin"]
+            else None
+        )
     if ratios_dict.get("net_margin"):
-        latest_net_margin = list(ratios_dict["net_margin"].values())[-1] if ratios_dict["net_margin"] else None
+        latest_net_margin = (
+            list(ratios_dict["net_margin"].values())[-1]
+            if ratios_dict["net_margin"]
+            else None
+        )
 
     validator.validate_margin_consistency(
         gross_margin=latest_gross_margin,
         operating_margin=None,  # Not calculated in this version
-        net_margin=latest_net_margin
+        net_margin=latest_net_margin,
     )
 
     # Validate quarterly data frequency
     revenue_dates, _ = series_values(revenue_q)
     if len(revenue_dates) >= 2:
         validator.validate_time_series_frequency(
-            dates=revenue_dates,
-            expected_frequency="quarterly",
-            tolerance_days=10
+            dates=revenue_dates, expected_frequency="quarterly", tolerance_days=10
         )
 
     # Get data quality summary
@@ -560,8 +568,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     global data_quality_logger
 
-    from logging_config import setup_logging
     import os
+
+    from logging_config import setup_logging
 
     # Set up logging
     _, dq_logger = setup_logging(log_level="INFO", log_to_file=True)
@@ -571,13 +580,15 @@ def main() -> None:
 
     try:
         logger.info(f"Loading data from {args.input}")
-        with open(args.input, "r", encoding="utf-8") as handle:
+        with open(args.input, encoding="utf-8") as handle:
             payload = json.load(handle)
 
         analysis = build_analysis(payload)
 
         os.makedirs(args.output, exist_ok=True)
-        output_path = f"{args.output}/{analysis['symbol'].replace('.', '_')}_analysis.json"
+        output_path = (
+            f"{args.output}/{analysis['symbol'].replace('.', '_')}_analysis.json"
+        )
 
         with open(output_path, "w", encoding="utf-8") as handle:
             json.dump(analysis, handle, ensure_ascii=False, indent=2)
@@ -596,7 +607,9 @@ def main() -> None:
             print(f"\n⚠️  {validation['failed']} validation warnings detected")
 
         if field_matching.get("fuzzy_matches", 0) > 0:
-            print(f"⚠️  {field_matching['fuzzy_matches']} fields matched using fuzzy matching")
+            print(
+                f"⚠️  {field_matching['fuzzy_matches']} fields matched using fuzzy matching"
+            )
 
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
@@ -604,7 +617,7 @@ def main() -> None:
         exit(1)
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON file: {e}")
-        print(f"❌ Error: Invalid JSON in input file")
+        print("❌ Error: Invalid JSON in input file")
         exit(1)
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)

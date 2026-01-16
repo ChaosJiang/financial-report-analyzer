@@ -24,8 +24,6 @@ class FinancialReportError(Exception):
 class DataFetchError(FinancialReportError):
     """Error occurred while fetching data from external sources."""
 
-    pass
-
 
 class APIError(DataFetchError):
     """Error from API call (HTTP errors, rate limiting, etc.)."""
@@ -57,7 +55,7 @@ class SymbolNotFoundError(DataFetchError):
         market_info = f" in {market} market" if market else ""
         super().__init__(
             f"Symbol '{symbol}' not found{market_info}",
-            details={'symbol': symbol, 'market': market}
+            details={"symbol": symbol, "market": market},
         )
         self.symbol = symbol
         self.market = market
@@ -66,7 +64,9 @@ class SymbolNotFoundError(DataFetchError):
 class RateLimitError(APIError):
     """API rate limit exceeded."""
 
-    def __init__(self, message: str = "API rate limit exceeded", retry_after: int = None):
+    def __init__(
+        self, message: str = "API rate limit exceeded", retry_after: int = None
+    ):
         """
         Initialize rate limit error.
 
@@ -74,7 +74,7 @@ class RateLimitError(APIError):
             message: Error message
             retry_after: Seconds to wait before retrying
         """
-        super().__init__(message, status_code=429, details={'retry_after': retry_after})
+        super().__init__(message, status_code=429, details={"retry_after": retry_after})
         self.retry_after = retry_after
 
 
@@ -97,7 +97,9 @@ class DataValidationError(FinancialReportError):
 class BalanceSheetValidationError(DataValidationError):
     """Balance sheet failed accounting equation validation."""
 
-    def __init__(self, assets: float, liabilities: float, equity: float, tolerance: float):
+    def __init__(
+        self, assets: float, liabilities: float, equity: float, tolerance: float
+    ):
         """
         Initialize balance sheet validation error.
 
@@ -115,14 +117,14 @@ class BalanceSheetValidationError(DataValidationError):
         )
         super().__init__(
             message,
-            validation_type='balance_sheet_equation',
+            validation_type="balance_sheet_equation",
             details={
-                'assets': assets,
-                'liabilities': liabilities,
-                'equity': equity,
-                'difference': diff,
-                'tolerance': tolerance
-            }
+                "assets": assets,
+                "liabilities": liabilities,
+                "equity": equity,
+                "difference": diff,
+                "tolerance": tolerance,
+            },
         )
 
 
@@ -145,10 +147,10 @@ class CurrencyConversionError(FinancialReportError):
         super().__init__(
             message,
             details={
-                'from_currency': from_currency,
-                'to_currency': to_currency,
-                'reason': reason
-            }
+                "from_currency": from_currency,
+                "to_currency": to_currency,
+                "reason": reason,
+            },
         )
         self.from_currency = from_currency
         self.to_currency = to_currency
@@ -173,10 +175,7 @@ class FieldNotFoundError(FinancialReportError):
 
         super().__init__(
             message,
-            details={
-                'field_name': field_name,
-                'available_fields': available_fields
-            }
+            details={"field_name": field_name, "available_fields": available_fields},
         )
         self.field_name = field_name
 
@@ -184,19 +183,13 @@ class FieldNotFoundError(FinancialReportError):
 class DataQualityWarning(Warning):
     """Warning for non-critical data quality issues."""
 
-    pass
-
 
 class ConfigurationError(FinancialReportError):
     """Error in configuration or environment setup."""
 
-    pass
-
 
 class ReportGenerationError(FinancialReportError):
     """Error during report generation."""
-
-    pass
 
 
 def format_error_for_user(error: Exception) -> str:
@@ -218,7 +211,7 @@ def format_error_for_user(error: Exception) -> str:
         msg += "  • Try searching for the company on finance.yahoo.com\n"
         return msg
 
-    elif isinstance(error, RateLimitError):
+    if isinstance(error, RateLimitError):
         msg = f"❌ {error}\n"
         if error.retry_after:
             msg += f"\nPlease wait {error.retry_after} seconds before trying again.\n"
@@ -228,14 +221,14 @@ def format_error_for_user(error: Exception) -> str:
             msg += "  • Use cached data with --use-cache if available\n"
         return msg
 
-    elif isinstance(error, CurrencyConversionError):
+    if isinstance(error, CurrencyConversionError):
         msg = f"❌ {error}\n"
         msg += "\nSuggestions:\n"
         msg += "  • Check your internet connection (currency rates require network access)\n"
         msg += "  • The analysis will continue but values may be in original currency\n"
         return msg
 
-    elif isinstance(error, FieldNotFoundError):
+    if isinstance(error, FieldNotFoundError):
         msg = f"❌ {error}\n"
         msg += "\nThis may indicate:\n"
         msg += "  • The company's financial statements use different field names\n"
@@ -243,12 +236,12 @@ def format_error_for_user(error: Exception) -> str:
         msg += "  • The company hasn't filed this particular statement\n"
         return msg
 
-    elif isinstance(error, DataValidationError):
+    if isinstance(error, DataValidationError):
         msg = f"⚠️  Data validation warning: {error}\n"
         msg += "\nThis doesn't prevent analysis but indicates potential data quality issues.\n"
         return msg
 
-    elif isinstance(error, APIError):
+    if isinstance(error, APIError):
         msg = f"❌ API Error: {error}\n"
         if error.status_code:
             msg += f"Status code: {error.status_code}\n"
@@ -258,6 +251,5 @@ def format_error_for_user(error: Exception) -> str:
         msg += "  • Check if the data source is experiencing issues\n"
         return msg
 
-    else:
-        # Generic error formatting
-        return f"❌ Error: {error}\n"
+    # Generic error formatting
+    return f"❌ Error: {error}\n"
