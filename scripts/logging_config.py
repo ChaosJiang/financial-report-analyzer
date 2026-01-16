@@ -45,9 +45,7 @@ class DataQualityLogger:
         self.missing_fields = []
         self.validation_warnings = []
 
-    def log_fuzzy_match(
-        self, field: str, matched: str, all_keys: list, confidence: float = 0.0
-    ):
+    def log_fuzzy_match(self, field: str, matched: str, confidence: float = 0.0):
         """Log when a fuzzy field match is used."""
         self.fuzzy_matches.append(
             {"field": field, "matched": matched, "confidence": confidence}

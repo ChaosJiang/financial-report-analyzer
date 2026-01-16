@@ -117,7 +117,6 @@ def find_matching_key(keys: Iterable[str], candidates: Iterable[str]) -> str | N
                 data_quality_logger.log_fuzzy_match(
                     field=candidate,
                     matched=matched,
-                    all_keys=keys_list[:10],  # First 10 keys for context
                     confidence=confidence,
                 )
             logger.warning(f"Fuzzy match: '{candidate}' -> '{matched}'")
