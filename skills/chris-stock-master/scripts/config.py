@@ -25,8 +25,11 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 # Enable file logging
 LOG_TO_FILE = os.getenv("LOG_TO_FILE", "true").lower() == "true"
 
-# Log directory (relative to project root)
-LOG_DIR = Path(os.getenv("LOG_DIR", "./logs"))
+# Project root directory (where SKILL.md is located)
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+# Log directory (absolute path based on project root)
+LOG_DIR = Path(os.getenv("LOG_DIR", str(_PROJECT_ROOT / "logs")))
 
 # ============================================================================
 # Data Validation Configuration
@@ -63,8 +66,8 @@ FUZZY_MATCH_MIN_CONFIDENCE = float(os.getenv("FUZZY_MATCH_CONFIDENCE", "0.5"))
 # Default cache age in hours
 DEFAULT_CACHE_AGE_HOURS = float(os.getenv("CACHE_AGE_HOURS", "24"))
 
-# Output directory for all generated files
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./output"))
+# Output directory for all generated files (absolute path based on project root)
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", str(_PROJECT_ROOT / "output")))
 
 # ============================================================================
 # Currency Conversion Configuration

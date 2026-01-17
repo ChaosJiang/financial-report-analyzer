@@ -117,6 +117,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze analyst expectations")
     parser.add_argument("--input", required=True, help="Data JSON path")
     parser.add_argument("--output", default="./output")
+    parser.add_argument("--price-years", type=int, default=None)
     return parser.parse_args()
 
 

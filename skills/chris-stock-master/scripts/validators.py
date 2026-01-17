@@ -79,7 +79,7 @@ class FinancialValidator:
         if assets is None or liabilities is None or equity is None:
             result = ValidationResult(
                 passed=True,
-                message="Balance sheet equation check skipped (missing data)",
+                message="资产负债表等式检查跳过（数据缺失）",
                 severity="info",
                 details={
                     "assets": assets,
@@ -94,7 +94,7 @@ class FinancialValidator:
         if assets == 0 or (liabilities == 0 and equity == 0):
             result = ValidationResult(
                 passed=True,
-                message="Balance sheet equation check skipped (zero values)",
+                message="资产负债表等式检查跳过（存在零值）",
                 severity="info",
             )
             self.results.append(result)
@@ -109,7 +109,7 @@ class FinancialValidator:
         if passed:
             result = ValidationResult(
                 passed=True,
-                message=f"Balance sheet equation validated (diff: {relative_diff:.2%})",
+                message=f"资产负债表等式验证通过（差异: {relative_diff:.2%}）",
                 severity="info",
                 details={
                     "assets": assets,
@@ -123,9 +123,9 @@ class FinancialValidator:
             result = ValidationResult(
                 passed=False,
                 message=(
-                    f"Balance sheet equation mismatch: Assets ({assets:,.0f}) ≠ "
-                    f"Liabilities ({liabilities:,.0f}) + Equity ({equity:,.0f}). "
-                    f"Difference: {difference:,.0f} ({relative_diff:.2%})"
+                    f"资产负债表等式不平衡: 总资产 ({assets:,.0f}) ≠ "
+                    f"总负债 ({liabilities:,.0f}) + 股东权益 ({equity:,.0f})，"
+                    f"差异: {difference:,.0f} ({relative_diff:.2%})"
                 ),
                 severity="warning",
                 details={
@@ -174,7 +174,7 @@ class FinancialValidator:
         if len(available_margins) < 2:
             result = ValidationResult(
                 passed=True,
-                message="Margin consistency check skipped (insufficient data)",
+                message="利润率一致性检查跳过（数据不足）",
                 severity="info",
             )
             self.results.append(result)
@@ -186,21 +186,21 @@ class FinancialValidator:
         if gross_margin is not None and operating_margin is not None:
             if gross_margin < operating_margin:
                 issues.append(
-                    f"Gross margin ({gross_margin:.2%}) < Operating margin ({operating_margin:.2%})"
+                    f"毛利率 ({gross_margin:.2%}) < 营业利润率 ({operating_margin:.2%})"
                 )
 
         # Check operating >= net
         if operating_margin is not None and net_margin is not None:
             if operating_margin < net_margin:
                 issues.append(
-                    f"Operating margin ({operating_margin:.2%}) < Net margin ({net_margin:.2%})"
+                    f"营业利润率 ({operating_margin:.2%}) < 净利率 ({net_margin:.2%})"
                 )
 
         # Check gross >= net
         if gross_margin is not None and net_margin is not None:
             if gross_margin < net_margin:
                 issues.append(
-                    f"Gross margin ({gross_margin:.2%}) < Net margin ({net_margin:.2%})"
+                    f"毛利率 ({gross_margin:.2%}) < 净利率 ({net_margin:.2%})"
                 )
 
         passed = len(issues) == 0
@@ -208,14 +208,14 @@ class FinancialValidator:
         if passed:
             result = ValidationResult(
                 passed=True,
-                message="Margin consistency validated",
+                message="利润率一致性验证通过",
                 severity="info",
                 details=margins,
             )
         else:
             result = ValidationResult(
                 passed=False,
-                message="Margin consistency issues: " + "; ".join(issues),
+                message="利润率一致性问题: " + "; ".join(issues),
                 severity="warning",
                 details=margins,
             )
@@ -247,7 +247,7 @@ class FinancialValidator:
         if len(dates) < 2:
             result = ValidationResult(
                 passed=True,
-                message="Time series frequency check skipped (insufficient data points)",
+                message="时间序列频率检查跳过（数据点不足）",
                 severity="info",
             )
             self.results.append(result)
@@ -288,7 +288,7 @@ class FinancialValidator:
         if not intervals:
             result = ValidationResult(
                 passed=True,
-                message="Time series frequency check skipped (no intervals)",
+                message="时间序列频率检查跳过（无间隔数据）",
                 severity="info",
             )
             self.results.append(result)
@@ -297,10 +297,11 @@ class FinancialValidator:
         avg_interval = sum(intervals) / len(intervals)
         passed = len(irregular_intervals) == 0
 
+        freq_name = "季度" if expected_frequency == "quarterly" else "年度"
         if passed:
             result = ValidationResult(
                 passed=True,
-                message=f"Time series frequency is regular ({expected_frequency}, avg: {avg_interval:.0f} days)",
+                message=f"时间序列频率正常（{freq_name}，平均间隔: {avg_interval:.0f} 天）",
                 severity="info",
                 details={
                     "expected_frequency": expected_frequency,
@@ -312,8 +313,8 @@ class FinancialValidator:
             result = ValidationResult(
                 passed=False,
                 message=(
-                    f"{len(irregular_intervals)} irregular intervals detected "
-                    f"(expected {expected_frequency}: {expected_days}±{tolerance_days} days)"
+                    f"检测到 {len(irregular_intervals)} 个不规则间隔"
+                    f"（预期{freq_name}: {expected_days}±{tolerance_days} 天）"
                 ),
                 severity="warning",
                 details={
@@ -349,10 +350,17 @@ class FinancialValidator:
         Returns:
             ValidationResult
         """
+        field_names_zh = {
+            "gross_margin": "毛利率",
+            "operating_margin": "营业利润率",
+            "net_margin": "净利率",
+        }
+        field_name_zh = field_names_zh.get(field_name, field_name)
+
         if value is None:
             result = ValidationResult(
                 passed=True,
-                message=f"Range check skipped for {field_name} (no value)",
+                message=f"{field_name_zh} 范围检查跳过（无数据）",
                 severity="info",
             )
             self.results.append(result)
@@ -361,24 +369,24 @@ class FinancialValidator:
         issues = []
 
         if min_value is not None and value < min_value:
-            issues.append(f"{field_name} ({value}) < minimum ({min_value})")
+            issues.append(f"{field_name_zh} ({value}) < 最小值 ({min_value})")
 
         if max_value is not None and value > max_value:
-            issues.append(f"{field_name} ({value}) > maximum ({max_value})")
+            issues.append(f"{field_name_zh} ({value}) > 最大值 ({max_value})")
 
         passed = len(issues) == 0
 
         if passed:
             result = ValidationResult(
                 passed=True,
-                message=f"{field_name} is within valid range",
+                message=f"{field_name_zh} 在有效范围内",
                 severity="info",
                 details={"value": value, "min": min_value, "max": max_value},
             )
         else:
             result = ValidationResult(
                 passed=False,
-                message="Range validation failed: " + "; ".join(issues),
+                message="范围验证失败: " + "; ".join(issues),
                 severity="warning",
                 details={"value": value, "min": min_value, "max": max_value},
             )

@@ -10,6 +10,7 @@ from typing import Any
 
 import analyst as analyst_module
 import analyze as analyze_module
+import config
 import fetch_data as fetch_data_module
 import report as report_module
 import valuation as valuation_module
@@ -99,7 +100,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--market", choices=["US", "CN", "HK", "JP"])
     parser.add_argument("--years", type=int, default=1)
     parser.add_argument("--price-years", type=int, default=None)
-    parser.add_argument("--output", default="./output")
+    parser.add_argument("--output", default=str(config.OUTPUT_DIR))
+
     parser.add_argument(
         "--max-age-hours",
         type=float,
