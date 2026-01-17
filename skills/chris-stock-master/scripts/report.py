@@ -250,7 +250,8 @@ def build_business_model_section(analysis: dict[str, Any]) -> str:
     summary = clean_text(company.get("summary"))
     lines = []
     if summary:
-        lines.append(f"- 业务概述: {summary}")
+        lines.append(f"- 业务概述（原文）: {summary}")
+        lines.append("- *注：以上为数据源原文，如需中文请自行翻译*")
     if company.get("industry"):
         lines.append(f"- 行业定位: {company.get('industry')}")
     if company.get("sector"):
@@ -365,7 +366,7 @@ def build_data_quality_section(analysis: dict[str, Any]) -> str:
                 lines.append("")
                 lines.append("**验证警告详情:**")
                 for warning in warnings[:5]:  # Show first 5
-                    lines.append(f"- {warning.get('message', 'Unknown warning')}")
+                    lines.append(f"- {warning.get('message', '未知警告')}")
                 if len(warnings) > 5:
                     lines.append(f"- ... 还有 {len(warnings) - 5} 个警告")
         lines.append("")
