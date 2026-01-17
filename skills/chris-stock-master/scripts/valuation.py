@@ -280,6 +280,8 @@ def build_valuation(data: dict[str, Any], analysis: dict[str, Any]) -> dict[str,
     eps_ttm = to_series(analysis.get("per_share_ttm", {}).get("eps", {}))
     sales_ttm = to_series(analysis.get("per_share_ttm", {}).get("sales", {}))
     ebitda_ttm = to_series(analysis.get("per_share_ttm", {}).get("ebitda", {}))
+    net_income_growth = analysis.get("growth", {}).get("net_income_yoy_quarterly")
+    revenue_growth = analysis.get("growth", {}).get("revenue_yoy_quarterly")
 
     book_per_share = to_series(
         analysis.get("balance_quarterly", {}).get("book_per_share", {})
@@ -318,11 +320,37 @@ def build_valuation(data: dict[str, Any], analysis: dict[str, Any]) -> dict[str,
     current_price = price_rows[-1][1] if price_rows else None
     current_market_cap = latest_value(market_cap_daily)
 
+    current_pe = latest_value(pe_daily)
+    forward_pe = info.get("forwardPE")
+
+    # If forward P/E not available from yfinance, calculate from earnings growth estimate
+    if forward_pe is None or forward_pe == 0:
+        earnings_growth = analysis.get("expectations", {}).get("earnings_growth")
+        if current_pe and earnings_growth and earnings_growth > 0:
+            # Forward P/E = Current P/E / (1 + earnings_growth)
+            # This assumes next year's earnings will grow by the estimated rate
+            forward_pe = current_pe / (1 + earnings_growth)
+            logger.info(
+                f"Calculated forward P/E: {forward_pe:.2f} from current P/E {current_pe:.2f} and growth {earnings_growth:.2%}"
+            )
+
+    growth_basis = None
+    if isinstance(net_income_growth, (int, float)):
+        growth_basis = net_income_growth
+    elif isinstance(revenue_growth, (int, float)):
+        growth_basis = revenue_growth
+    peg_value = None
+    if isinstance(current_pe, (int, float)) and isinstance(growth_basis, (int, float)):
+        if growth_basis > 0:
+            peg_value = current_pe / (growth_basis * 100)
+
     current_metrics = {
-        "pe": latest_value(pe_daily),
+        "pe": current_pe,
+        "forward_pe": forward_pe,
         "ps": latest_value(ps_daily),
         "pb": latest_value(pb_daily),
         "ev_to_ebitda": latest_value(ev_to_ebitda_daily),
+        "peg": peg_value,
     }
 
     metric_dates = (
@@ -378,11 +406,13 @@ def build_valuation(data: dict[str, Any], analysis: dict[str, Any]) -> dict[str,
         },
         "percentiles": {
             "pe": percentile(current_metrics["pe"], pe_daily),
+            "forward_pe": None,
             "ps": percentile(current_metrics["ps"], ps_daily),
             "pb": percentile(current_metrics["pb"], pb_daily),
             "ev_to_ebitda": percentile(
                 current_metrics["ev_to_ebitda"], ev_to_ebitda_daily
             ),
+            "peg": None,
         },
         "currency": {
             "market": market_currency,
