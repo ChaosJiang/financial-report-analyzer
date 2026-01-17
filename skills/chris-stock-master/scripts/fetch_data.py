@@ -10,6 +10,7 @@ from typing import Any
 import akshare as ak
 import numpy as np
 import yfinance as yf
+from config import get_peer_map
 from exceptions import APIError, DataFetchError, SymbolNotFoundError
 from logging_config import get_module_logger
 
@@ -250,6 +251,33 @@ def get_quarterly_cashflow(ticker: yf.Ticker) -> Any:
     return {}
 
 
+def fetch_peer_snapshots(peers: list[str]) -> list[dict[str, Any]]:
+    if not peers:
+        return []
+    results = []
+    for symbol in peers:
+        try:
+            ticker = yf.Ticker(symbol)
+            info = get_ticker_info(ticker)
+            if not info:
+                continue
+            results.append(
+                {
+                    "symbol": symbol,
+                    "name": info.get("shortName") or info.get("longName") or symbol,
+                    "market_cap": info.get("marketCap"),
+                    "gross_margin": info.get("grossMargins"),
+                    "net_margin": info.get("profitMargins"),
+                    "debt_to_equity": info.get("debtToEquity"),
+                    "pe": info.get("trailingPE") or info.get("forwardPE"),
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch peer snapshot for {symbol}: {e}")
+            continue
+    return results
+
+
 def fetch_yfinance(symbol: str, years: int, price_years: int) -> dict[str, Any]:
     """Fetch data from Yahoo Finance."""
     logger.info(f"Fetching yfinance data for {symbol}")
@@ -286,6 +314,13 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> dict[str, Any]:
     recommendations_summary = getattr(ticker, "recommendations_summary", None)
     analyst_price_target = getattr(ticker, "analyst_price_target", None)
 
+    peers = []
+    industry = info.get("industry")
+    peer_map = get_peer_map()
+    if industry and industry in peer_map:
+        peers = [peer for peer in peer_map[industry] if peer != symbol]
+    peer_snapshots = fetch_peer_snapshots(peers)
+
     return {
         "info": info,
         "financials": {
@@ -316,6 +351,7 @@ def fetch_yfinance(symbol: str, years: int, price_years: int) -> dict[str, Any]:
             "recommendations_summary": df_to_dict(recommendations_summary),
             "price_target": df_to_dict(analyst_price_target),
         },
+        "peers": peer_snapshots,
     }
 
 

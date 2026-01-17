@@ -90,6 +90,15 @@ DEFAULT_YEARS = int(os.getenv("DEFAULT_YEARS", "1"))
 DEFAULT_PRICE_YEARS = int(os.getenv("DEFAULT_PRICE_YEARS", "6"))
 
 # ============================================================================
+# Peer Comparison Configuration
+# ============================================================================
+
+PEER_MAP = {
+    "Semiconductors": ["NVDA", "INTC", "AVGO", "QCOM"],
+    "Semiconductor Equipment & Materials": ["ASML", "AMAT", "LRCX"],
+}
+
+# ============================================================================
 # Valuation Configuration
 # ============================================================================
 
@@ -112,6 +121,10 @@ MAX_FUZZY_MATCHES_IN_REPORT = int(os.getenv("MAX_FUZZY_MATCHES", "5"))
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+
+def get_peer_map() -> dict:
+    return PEER_MAP
 
 
 def get_validation_config() -> dict:

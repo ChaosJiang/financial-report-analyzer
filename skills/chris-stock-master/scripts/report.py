@@ -78,8 +78,17 @@ def build_financial_table(analysis: dict[str, Any]) -> str:
     net_income = series_from_dict(analysis.get("financials", {}).get("net_income", {}))
     gross_margin = series_from_dict(analysis.get("ratios", {}).get("gross_margin", {}))
     net_margin = series_from_dict(analysis.get("ratios", {}).get("net_margin", {}))
-    roe = series_from_dict(analysis.get("ratios_ttm", {}).get("roe", {}))
-    roa = series_from_dict(analysis.get("ratios_ttm", {}).get("roa", {}))
+
+    # Try TTM ROE/ROA first, then annual ratios as fallback
+    roe_series = analysis.get("ratios_ttm", {}).get("roe", {})
+    if not roe_series or len(roe_series) == 0:
+        roe_series = analysis.get("ratios", {}).get("roe", {})
+    roa_series = analysis.get("ratios_ttm", {}).get("roa", {})
+    if not roa_series or len(roa_series) == 0:
+        roa_series = analysis.get("ratios", {}).get("roa", {})
+
+    roe = series_from_dict(roe_series)
+    roa = series_from_dict(roa_series)
     free_cash_flow = series_from_dict(
         analysis.get("financials", {}).get("free_cash_flow", {})
     )
@@ -114,6 +123,13 @@ def build_financial_table(analysis: dict[str, Any]) -> str:
             values = []
             for date in dates:
                 value = series_map.get(date)
+                # If exact date not found for ROE/ROA, use latest available value
+                if value is None and label in {"ROE", "ROA"} and series_map:
+                    # Get the latest value from the series
+                    sorted_dates = sorted(series_map.keys())
+                    if sorted_dates:
+                        value = series_map[sorted_dates[-1]]
+
                 if label.endswith("Margin") or label in {"ROE", "ROA"}:
                     values.append(format_percent(value) if value is not None else "-")
                 else:
@@ -142,9 +158,11 @@ def build_valuation_table(valuation: dict[str, Any]) -> str:
 
     rows = [
         ("P/E", metrics.get("pe"), percentiles.get("pe")),
+        ("Forward P/E", metrics.get("forward_pe"), percentiles.get("forward_pe")),
         ("P/S", metrics.get("ps"), percentiles.get("ps")),
         ("P/B", metrics.get("pb"), percentiles.get("pb")),
         ("EV/EBITDA", metrics.get("ev_to_ebitda"), percentiles.get("ev_to_ebitda")),
+        ("PEG", metrics.get("peg"), percentiles.get("peg")),
     ]
 
     percentile_label = build_percentile_label(valuation)
@@ -305,6 +323,9 @@ def summarize_profitability(analysis: dict[str, Any]) -> list[str]:
         lines.append(f"- 最新毛利率: {gross_margin * 100:.2f}%")
     if net_margin is not None:
         lines.append(f"- 最新净利率: {net_margin * 100:.2f}%")
+    if gross_margin is not None and net_margin is not None:
+        gap = (gross_margin - net_margin) * 100
+        lines.append(f"- 毛利/净利差: {gap:.2f}%")
     return lines
 
 
@@ -346,10 +367,46 @@ def build_growth_table(growth_map: dict[str, Any], title: str) -> str:
 
 
 def build_segment_table(analysis: dict[str, Any], data_key: str, title: str) -> str:
+    """Build revenue segment breakdown table with graceful degradation."""
     segment = analysis.get("segment", {})
     segment_data = segment.get(data_key)
     if not isinstance(segment_data, dict) or not segment_data:
-        return ""
+        # Graceful degradation: provide alternative information
+        company = analysis.get("company", {})
+        company_website = company.get("website")
+        company_name = company.get("name", "该公司")
+
+        fallback = [
+            f"### {title}",
+            "",
+            f"*注：{company_name}未公开详细的业务板块收入数据。*",
+            "",
+        ]
+
+        # If we have business summary, extract product/service info
+        summary = company.get("summary", "")
+        if summary and len(summary) > 100:
+            # Extract first few sentences as business description
+            sentences = summary.split(". ")[:3]
+            if sentences:
+                fallback.append("根据公司业务描述，主要业务领域包括：")
+                fallback.append("")
+                # Try to extract business lines from summary
+                # This is a simple heuristic - could be improved
+                for sentence in sentences[:2]:
+                    if len(sentence) > 20:
+                        fallback.append(f"- {sentence.strip()}")
+                fallback.append("")
+
+        if company_website:
+            fallback.append(
+                f"详细收入拆分请参考公司官方投资者关系页面：[{company_website}]({company_website})"
+            )
+        else:
+            fallback.append("建议查阅公司官方财报获取详细收入拆分信息。")
+
+        return "\n".join(fallback)
+
     table = [f"### {title}", "", "| 项目 | 收入占比 |", "| --- | --- |"]
     for name, value in segment_data.items():
         numeric = to_number(value)
@@ -446,6 +503,11 @@ def build_business_model_section(analysis: dict[str, Any]) -> str:
     if company.get("sector"):
         lines.append(f"- 领域定位: {company.get('sector')}")
 
+    segment_business = build_segment_table(analysis, "revenue", "业务收入结构")
+    # Always display segment section (will show graceful degradation if data not available)
+    lines.append("")
+    lines.append(segment_business)
+
     metrics_lines = []
     metrics_lines.extend(summarize_growth(analysis))
     metrics_lines.extend(summarize_profitability(analysis))
@@ -461,8 +523,136 @@ def build_business_model_section(analysis: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_competitive_insights(
+    analysis: dict[str, Any], peers: list[dict[str, Any]]
+) -> str:
+    """Build competitive analysis insights explaining margins and competitive position."""
+    if not peers:
+        return ""
+
+    lines = ["### 竞争力分析", ""]
+
+    # Get company metrics
+    company_name = analysis.get("company", {}).get("name", "本公司")
+    ratios = analysis.get("ratios", {})
+    latest_gross_margin = None
+    latest_net_margin = None
+    if ratios.get("gross_margin"):
+        margins = list(ratios["gross_margin"].values())
+        latest_gross_margin = margins[-1] if margins else None
+    if ratios.get("net_margin"):
+        margins = list(ratios["net_margin"].values())
+        latest_net_margin = margins[-1] if margins else None
+
+    # Calculate peer averages
+    peer_gross_margins = [
+        p.get("gross_margin")
+        for p in peers
+        if p.get("gross_margin") is not None and p.get("name") != company_name
+    ]
+    peer_net_margins = [
+        p.get("net_margin")
+        for p in peers
+        if p.get("net_margin") is not None and p.get("name") != company_name
+    ]
+
+    # Margin comparison
+    if latest_gross_margin is not None and peer_gross_margins:
+        avg_peer_gross = sum(peer_gross_margins) / len(peer_gross_margins)
+        diff = (latest_gross_margin - avg_peer_gross) * 100
+        comparison = "高于" if diff > 0 else "低于"
+        lines.append(
+            f"- 毛利率 {latest_gross_margin:.2%} {comparison}同行平均 {avg_peer_gross:.2%} ({abs(diff):.1f}pp)"
+        )
+
+    # Explain margin gap if both margins available
+    if latest_gross_margin is not None and latest_net_margin is not None:
+        margin_gap = (latest_gross_margin - latest_net_margin) * 100
+        if margin_gap > 30:  # Significant gap
+            lines.append(
+                f"- 净利率 {latest_net_margin:.2%} 低于毛利率 {margin_gap:.1f}pp，主要原因可能包括："
+            )
+
+            # Check R&D intensity
+            r_and_d = analysis.get("research_and_development", {}).get("ratio")
+            if r_and_d and r_and_d > 0.15:  # High R&D >15%
+                lines.append(
+                    f"  * 高额研发投入 {r_and_d:.2%}（维持技术竞争力的必要成本）"
+                )
+
+            # Check debt level
+            debt_to_equity = None
+            if ratios.get("debt_to_equity"):
+                debt_values = list(ratios["debt_to_equity"].values())
+                debt_to_equity = debt_values[-1] if debt_values else None
+
+            if debt_to_equity is not None and debt_to_equity > 0.5:
+                lines.append(
+                    f"  * 较高财务杠杆（负债权益比 {debt_to_equity:.2f}）产生的利息支出"
+                )
+            elif debt_to_equity is not None and debt_to_equity < 0.3:
+                lines.append(
+                    f"  * 低财务杠杆（负债权益比 {debt_to_equity:.2f}）表明财务结构稳健"
+                )
+
+            # Industry-specific factors
+            industry = analysis.get("company", {}).get("industry", "")
+            if "Semiconductor" in industry or "半导体" in industry:
+                lines.append("  * 半导体行业特有的高额资本支出和折旧摊销")
+
+    if len(lines) <= 2:  # Only header was added
+        return ""
+
+    return "\n".join(lines)
+
+
+def build_peer_table(peers: list[dict[str, Any]], company_name: str = None) -> str:
+    """Build enhanced peer comparison table with more metrics."""
+    if not peers:
+        return ""
+    table = [
+        "### 同行对标",
+        "",
+        "| 公司 | 市值 | 毛利率 | 净利率 | 负债权益比 | P/E |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for peer in peers:
+        name = peer.get("name", "-")
+        # Highlight the target company with **bold**
+        if company_name and name == company_name:
+            name = f"**{name}**"
+
+        market_cap = peer.get("market_cap")
+        if market_cap and market_cap > 1e9:
+            # Format in billions
+            market_cap_str = f"${market_cap / 1e9:.1f}B"
+        elif market_cap and market_cap > 1e6:
+            # Format in millions
+            market_cap_str = f"${market_cap / 1e6:.1f}M"
+        else:
+            market_cap_str = format_number(market_cap) if market_cap else "-"
+
+        table.append(
+            "| "
+            + name
+            + " | "
+            + market_cap_str
+            + " | "
+            + format_percent(peer.get("gross_margin"))
+            + " | "
+            + format_percent(peer.get("net_margin"))
+            + " | "
+            + format_number(peer.get("debt_to_equity"))
+            + " | "
+            + format_number(peer.get("pe"))
+            + " |"
+        )
+    return "\n".join(table)
+
+
 def build_competitive_section(analysis: dict[str, Any]) -> str:
     company = analysis.get("company", {})
+    company_name = company.get("name")
     lines = []
     if company.get("industry"):
         lines.append(f"- 行业类型: {company.get('industry')}")
@@ -476,14 +666,20 @@ def build_competitive_section(analysis: dict[str, Any]) -> str:
     if geo_risk:
         lines.append(geo_risk)
 
-    segment_business = build_segment_table(analysis, "revenue", "业务收入结构")
-    segment_geo = build_segment_table(analysis, "geo", "区域收入结构")
-    if segment_business:
+    peers = analysis.get("peers", [])
+    peer_table = build_peer_table(
+        peers if isinstance(peers, list) else [], company_name
+    )
+    if peer_table:
         lines.append("")
-        lines.append(segment_business)
-    if segment_geo:
-        lines.append("")
-        lines.append(segment_geo)
+        lines.append(peer_table)
+
+        # Add competitive insights if peer data is available
+        if peers:
+            insights = build_competitive_insights(analysis, peers)
+            if insights:
+                lines.append("")
+                lines.append(insights)
 
     if not lines:
         return "- 暂无竞争格局解读，建议补充同行与行业数据。"
@@ -512,18 +708,50 @@ def build_investment_section(
 
     if metrics:
         pe = metrics.get("pe")
+        forward_pe = metrics.get("forward_pe")
         ps = metrics.get("ps")
         pb = metrics.get("pb")
+        peg = metrics.get("peg")
         lines.append(
             "- 估值指标: "
             + ", ".join(
                 [
                     f"P/E {format_number(pe)} ({format_number(percentiles.get('pe'))}%)",
+                    f"Forward P/E {format_number(forward_pe)}",
+                    f"PEG {format_number(peg)}",
                     f"P/S {format_number(ps)} ({format_number(percentiles.get('ps'))}%)",
                     f"P/B {format_number(pb)} ({format_number(percentiles.get('pb'))}%)",
                 ]
             )
         )
+
+        # Add valuation interpretation
+        valuation_insights = []
+        if peg is not None and pe is not None:
+            if peg < 1:
+                valuation_insights.append(
+                    f"PEG {format_number(peg)} < 1.0 表明当前估值相对增长预期偏低，可能被低估"
+                )
+            elif peg < 2:
+                valuation_insights.append(
+                    f"PEG {format_number(peg)} < 2.0 表明增长预期可支撑当前估值水平"
+                )
+            else:
+                valuation_insights.append(
+                    f"PEG {format_number(peg)} > 2.0 表明估值相对增长预期偏高，需谨慎"
+                )
+
+        if forward_pe is not None and pe is not None and forward_pe > 0:
+            implied_growth = (pe / forward_pe - 1) * 100
+            if implied_growth > 0:
+                valuation_insights.append(
+                    f"Forward P/E {format_number(forward_pe)} 隐含市场预期明年盈利增长 {format_number(implied_growth)}%"
+                )
+
+        if valuation_insights:
+            lines.append("- 估值合理性分析:")
+            for insight in valuation_insights:
+                lines.append(f"  * {insight}")
 
     fundamentals = []
     fundamentals.extend(summarize_growth(analysis))

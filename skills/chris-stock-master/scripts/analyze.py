@@ -500,6 +500,19 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     roe_ttm = compute_ttm_ratio(net_income_ttm, equity_avg_q)
     roa_ttm = compute_ttm_ratio(net_income_ttm, assets_avg_q)
 
+    # Fallback: if TTM calculation failed due to insufficient balance sheet data,
+    # use direct division with latest balance sheet values
+    if roe_ttm.height == 0 and net_income_ttm.height > 0 and total_equity_q.height > 0:
+        logger.info(
+            "TTM ROE calculation returned empty, using direct division fallback"
+        )
+        roe_ttm = divide_series(net_income_ttm, total_equity_q)
+    if roa_ttm.height == 0 and net_income_ttm.height > 0 and total_assets_q.height > 0:
+        logger.info(
+            "TTM ROA calculation returned empty, using direct division fallback"
+        )
+        roa_ttm = divide_series(net_income_ttm, total_assets_q)
+
     # Validate financial data
     logger.info("Running data validation")
     validator = FinancialValidator()
@@ -655,6 +668,9 @@ def build_analysis(payload: dict[str, Any]) -> dict[str, Any]:
         "research_and_development": {
             "ratio": r_and_d_ratio,
         },
+        "peers": payload.get("peers", [])
+        if isinstance(payload.get("peers"), list)
+        else [],
         "data_quality": {
             "validation": validation_summary,
             "field_matching": dq_summary,
